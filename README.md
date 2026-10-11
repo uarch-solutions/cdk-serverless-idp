@@ -84,7 +84,7 @@ it is not shown again (`rotateClientSecret` makes a new one).
 
 The hook runs at the end of every sign-in and on every access token, including refreshes. A role change or a cancelled
 plan therefore applies at the next refresh, which happens within 15 minutes. Only claims with the application's prefix
-are kept. A hook that fails or times out (2 s) denies the sign-in, unless the application sets `onError: "allow"`.
+are kept. A hook that fails or times out (2 s by default, up to 10 s for applications with slow cold starts) denies the sign-in, unless the application sets `onError: "allow"`.
 
 ## Cost
 

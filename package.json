@@ -1,6 +1,6 @@
 {
   "name": "cdk-serverless-idp",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "AWS CDK construct: a multi-tenant OpenID Connect identity provider on Lambda + DynamoDB that costs nothing while nobody is signing in. Realms per customer, applications per SaaS, post-login hooks.",
   "license": "Apache-2.0",
   "author": "uarch-solutions",

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+- Hook timeout up to 10 s (was 5 s): applications whose hook runs on a cold-starting function in a VPC need more than 3 s on the first call.
+
 ## 0.2.0
 
 - Second factor required per person (`mfaRequired`), with a grace period (`mfaGraceUntil`) during which the enrollment can be postponed.

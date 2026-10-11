@@ -136,7 +136,7 @@ async function run(event: AdminEvent, deps: Parameters<typeof admin>[1]): Promis
       if (!confidential) secretEnc = null;
       const hookInput = input.hook === undefined ? undefined : input.hook;
       const hook: Hook | null = hookInput === undefined ? current?.hook ?? null : hookInput === null ? null : {
-        url: hookInput.url, lambdaArn: hookInput.lambdaArn, onError: hookInput.onError ?? 'deny', timeoutMs: Math.min(Math.max(hookInput.timeoutMs ?? 2000, 200), 5000),
+        url: hookInput.url, lambdaArn: hookInput.lambdaArn, onError: hookInput.onError ?? 'deny', timeoutMs: Math.min(Math.max(hookInput.timeoutMs ?? 2000, 200), 10000),
         secretEnc: hookInput.secret ? cipher.encrypt(hookInput.secret) : current?.hook?.secretEnc,
       };
       if (hook?.url && !/^https:\/\//.test(hook.url) && !/^http:\/\/(localhost|127\.0\.0\.1)/.test(hook.url)) throw new AdminError('INVALID_HOOK', 'hook url must be https');
