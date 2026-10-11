@@ -281,6 +281,23 @@ describe('OpenID Provider', () => {
     expect((await b2.fetch(`${idp.base}${skip.replace(/interaction\/[^/]+/, 'interaction/x')}`, { method: 'POST' })).status).toBeGreaterThanOrEqual(400);
   });
 
+  it('temporary password set by an administrator: a new one is chosen at the next sign-in', async () => {
+    const u = await idp.admin({ action: 'upsertUser', realm: 'acme', user: { email: 'tmp@acme.test', name: 'Tmp' } });
+    await idp.admin({ action: 'setPassword', realm: 'acme', id: u.user.id, password: 'Temp-12345', temporary: true });
+    const b = new Browser();
+    const { challenge, verifier } = pkce();
+    let page = await b.follow(authorizeUrl('acme', challenge), idp.base);
+    page = await b.post(`${idp.base}${formAction(page.html)}`, { _csrf: field(page.html, '_csrf'), email: 'tmp@acme.test', password: 'Temp-12345' }, idp.base);
+    expect(page.html).toContain('Crie uma senha nova');
+    const same = await b.post(`${idp.base}${formAction(page.html)}`, { _csrf: b.jar.get('_csrf')!, password: 'Temp-12345', confirm: 'Temp-12345' }, idp.base);
+    expect(same.res.status).toBe(400); // must be different
+    page = await b.post(`${idp.base}${formAction(page.html)}`, { _csrf: b.jar.get('_csrf')!, password: 'Definitiva-123', confirm: 'Definitiva-123' }, idp.base);
+    expect(page.url.startsWith(APP_CB)).toBe(true);
+    expect((await token('acme', { grant_type: 'authorization_code', code: codeOf(page.url)!, redirect_uri: APP_CB, code_verifier: verifier })).status).toBe(200);
+    expect((await idp.admin({ action: 'getUser', realm: 'acme', id: u.user.id })).user.passwordChangeRequired).toBe(false);
+    expect((await signIn(new Browser(), 'acme', 'tmp@acme.test', 'Definitiva-123')).page.url.startsWith(APP_CB)).toBe(true);
+  });
+
   it('disabling a person ends the open sessions; audit trail records the events', async () => {
     const t = await (async () => {
       const { page, verifier } = await signIn(new Browser(), 'acme', 'ana@acme.test', 'Nova-Senha-456');

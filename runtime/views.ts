@@ -30,6 +30,7 @@ const T = {
     scopes: { openid: 'Saber quem você é', email: 'Ver seu e-mail', profile: 'Ver seu nome', offline_access: 'Manter você conectado' } as Record<string, string>,
     deniedByApp: 'O aplicativo não liberou o seu acesso',
     notNow: 'Agora não', graceUntil: 'Você pode adiar até',
+    changeRequiredTitle: 'Crie uma senha nova', changeRequiredHelp: 'A senha que você usou foi definida pela administração e vale só para o primeiro acesso.',
   },
   en: {
     signIn: 'Sign in', email: 'Email', password: 'Password', forgot: 'Forgot password', or: 'or',
@@ -57,6 +58,7 @@ const T = {
     scopes: { openid: 'Know who you are', email: 'See your email', profile: 'See your name', offline_access: 'Keep you signed in' } as Record<string, string>,
     deniedByApp: 'The application did not allow your access',
     notNow: 'Not now', graceUntil: 'You can postpone until',
+    changeRequiredTitle: 'Create a new password', changeRequiredHelp: 'The password you used was set by an administrator and is valid for the first sign-in only.',
   },
 };
 export type Strings = (typeof T)['en'];
@@ -165,8 +167,8 @@ export function forgotForm(t: Strings, o: { action: string; csrf: string; sent?:
 <button type="submit">${esc(t.sendLink)}</button></form>`;
 }
 
-export function setPasswordForm(t: Strings, o: { action: string; csrf: string; invite: boolean; email: string; error?: string }) {
-  return `<h1>${esc(o.invite ? t.inviteTitle : t.resetTitle)}</h1><p class="muted">${esc(o.email)}</p>${errorLine(o.error)}
+export function setPasswordForm(t: Strings, o: { action: string; csrf: string; invite: boolean; email: string; error?: string; title?: string; help?: string }) {
+  return `<h1>${esc(o.title ?? (o.invite ? t.inviteTitle : t.resetTitle))}</h1><p class="muted">${esc(o.help ?? o.email)}</p>${errorLine(o.error)}
 <form method="post" action="${esc(o.action)}">${csrfField(o.csrf)}
 <input type="email" name="username" autocomplete="username" value="${esc(o.email)}" hidden>
 <label for="password">${esc(t.newPassword)}</label><input id="password" name="password" type="password" autocomplete="new-password" minlength="8" required autofocus>

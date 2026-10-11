@@ -160,6 +160,12 @@ export function createApp(deps: Deps) {
   /** After the first factor: second factor (or its mandatory enrollment) or the end of the sign-in. */
   async function afterFirstFactor(ctx: Ctx, realm: Realm, provider: Provider, details: Awaited<ReturnType<Provider['interactionDetails']>>, user: UserRecord, method: 'password' | 'google' | 'facebook') {
     const t = v.strings(realm.locale);
+    if (method === 'password' && user.passwordChangeRequired) {
+      await store.putStep(`pwd#${details.uid}`, { userId: user.id }, 900);
+      return render(ctx, realm, t.changeRequiredTitle, v.setPasswordForm(t, {
+        action: `${base(realm)}/interaction/${details.uid}/new-password`, csrf: csrf(ctx), invite: false, email: user.email, title: t.changeRequiredTitle, help: t.changeRequiredHelp,
+      }));
+    }
     if (user.mfa?.enabledAt) {
       await store.putStep(`mfa#${details.uid}`, { userId: user.id, method }, 600);
       return render(ctx, realm, t.mfaTitle, v.mfaForm(t, { action: `${base(realm)}/interaction/${details.uid}/mfa`, csrf: csrf(ctx) }));
@@ -296,6 +302,29 @@ export function createApp(deps: Deps) {
     await finishLogin(ctx, realm, provider, details, user, step.method, true);
   });
 
+  router.post('/realms/:realm/interaction/:uid/new-password', parse, async (ctx) => {
+    const realm = await realmOf(ctx.params.realm);
+    const provider = providerFor(realm);
+    const t = v.strings(realm.locale);
+    checkCsrf(ctx);
+    const details = await interaction(ctx, provider);
+    if (!details || details.uid !== ctx.params.uid) throw new HttpError(400, 'invalid interaction');
+    const step = await store.step<{ userId: string }>(`pwd#${details.uid}`);
+    const user = step ? await store.user(realm.id, step.userId) : null;
+    if (!step || !user || user.status !== 'ACTIVE' || !user.passwordChangeRequired) return loginPage(ctx, realm, details.uid, { error: t.linkExpired }, 400);
+    const { password = '', confirm = '' } = body(ctx);
+    const error = passwordProblem(password) ? t.tooShort : password !== confirm ? t.mismatch : (await verifyPassword(user.passwordHash, password)) ? t.mismatch : null;
+    if (error) {
+      return render(ctx, realm, t.changeRequiredTitle, v.setPasswordForm(t, { action: ctx.path, csrf: csrf(ctx), invite: false, email: user.email, title: t.changeRequiredTitle, help: t.changeRequiredHelp, error }), 400);
+    }
+    const updated: UserRecord = { ...user, passwordHash: await hashPassword(password), passwordChangeRequired: false, updatedAt: deps.now().toISOString() };
+    await store.putUser(updated);
+    await store.deleteStep(`pwd#${details.uid}`);
+    await store.deleteByIndex('gsi3', `ACCOUNT#${realm.id}#${user.id}`);
+    await store.audit(realm.id, 'PASSWORD_CHANGED', { userId: user.id, ip: ctx.ip, reason: 'temporary' }, settings.auditRetentionDays);
+    await afterFirstFactor(ctx, realm, provider, details, updated, 'password');
+  });
+
   router.post('/realms/:realm/interaction/:uid/mfa-skip', parse, async (ctx) => {
     const realm = await realmOf(ctx.params.realm);
     const provider = providerFor(realm);
@@ -430,7 +459,7 @@ export function createApp(deps: Deps) {
     const error = problem ? t.tooShort : password !== confirm ? t.mismatch : null;
     if (error) return render(ctx, realm, t.setPassword, v.setPasswordForm(t, { action: ctx.path, csrf: csrf(ctx), invite: target.record.kind === 'invite', email: target.user.email, error }), 400);
     const now = deps.now().toISOString();
-    await store.putUser({ ...target.user, passwordHash: await hashPassword(password), emailVerified: true, updatedAt: now });
+    await store.putUser({ ...target.user, passwordHash: await hashPassword(password), emailVerified: true, passwordChangeRequired: false, updatedAt: now });
     await store.deleteActionToken(sha256(ctx.params.token));
     // A new password ends every open session of the person.
     await store.deleteByIndex('gsi3', `ACCOUNT#${realm.id}#${target.user.id}`);
@@ -472,7 +501,7 @@ export function createApp(deps: Deps) {
     const { newPassword = '', confirm = '' } = body(ctx);
     const error = passwordProblem(newPassword) ? t.tooShort : newPassword !== confirm ? t.mismatch : null;
     if (error) return accountView(ctx, realm, { error, email: user.email }, 400);
-    await store.putUser({ ...user, passwordHash: await hashPassword(newPassword), updatedAt: deps.now().toISOString() });
+    await store.putUser({ ...user, passwordHash: await hashPassword(newPassword), passwordChangeRequired: false, updatedAt: deps.now().toISOString() });
     await store.deleteByIndex('gsi3', `ACCOUNT#${realm.id}#${user.id}`);
     await store.audit(realm.id, 'PASSWORD_CHANGED', { userId: user.id, ip: ctx.ip }, settings.auditRetentionDays);
     accountView(ctx, realm, { notice: t.done, email: user.email });

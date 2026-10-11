@@ -17,11 +17,11 @@ export type AdminEvent =
   | { action: 'putClient'; client: Partial<Omit<ClientRecord, 'secretEnc' | 'hook'>> & { clientId: string; confidential?: boolean; hook?: (Omit<Hook, 'secretEnc'> & { secret?: string }) | null } }
   | { action: 'rotateClientSecret'; clientId: string }
   | { action: 'getClient'; clientId: string }
-  | { action: 'upsertUser'; realm: string; user: { id?: string; email: string; name: string; status?: UserRecord['status']; emailVerified?: boolean; passwordHash?: string; mfaRequired?: boolean; mfaGraceUntil?: string | null } }
+  | { action: 'upsertUser'; realm: string; user: { id?: string; email: string; name: string; status?: UserRecord['status']; emailVerified?: boolean; passwordHash?: string; passwordChangeRequired?: boolean; mfaRequired?: boolean; mfaGraceUntil?: string | null } }
   | { action: 'addRedirectUris'; clientId: string; redirectUris?: string[]; postLogoutRedirectUris?: string[] }
   | { action: 'importUsers'; realm: string; users: ImportUser[] }
   | { action: 'getUser'; realm: string; id?: string; email?: string }
-  | { action: 'setPassword'; realm: string; id: string; password: string }
+  | { action: 'setPassword'; realm: string; id: string; password: string; temporary?: boolean }
   | { action: 'invite'; realm: string; id: string; kind?: 'invite' | 'reset'; returnTo?: string; send?: boolean; ttlHours?: number }
   | { action: 'resetMfa'; realm: string; id: string }
   | { action: 'revokeSessions'; realm: string; id: string }
@@ -35,7 +35,7 @@ export interface ImportUser {
   mfaSecret?: string | null; mfaEnabledAt?: string | null; mfaLastStep?: number | null;
   /** sha256 of the lowercase recovery codes. */
   recoveryHashes?: string[];
-  mfaRequired?: boolean; mfaGraceUntil?: string | null;
+  mfaRequired?: boolean; mfaGraceUntil?: string | null; passwordChangeRequired?: boolean;
   identities?: { provider: string; subject: string; email: string | null }[];
 }
 
@@ -193,6 +193,7 @@ async function run(event: AdminEvent, deps: Parameters<typeof admin>[1]): Promis
         emailVerified: current && current.email === email ? current.emailVerified || !!event.user.emailVerified : !!event.user.emailVerified,
         mfa: current?.mfa ?? null, recoveryHashes: current?.recoveryHashes ?? [],
         mfaRequired: event.user.mfaRequired ?? current?.mfaRequired ?? false,
+        passwordChangeRequired: event.user.passwordChangeRequired ?? (event.user.passwordHash ? false : current?.passwordChangeRequired ?? false),
         mfaGraceUntil: event.user.mfaGraceUntil !== undefined ? event.user.mfaGraceUntil : current?.mfaGraceUntil ?? null,
         createdAt: current?.createdAt ?? nowIso(), updatedAt: nowIso(),
       };
@@ -214,6 +215,7 @@ async function run(event: AdminEvent, deps: Parameters<typeof admin>[1]): Promis
           id: u.id, realm: event.realm, email, name: u.name, passwordHash: u.passwordHash, status: u.status, emailVerified: u.emailVerified,
           mfa: u.mfaSecret ? { secretEnc: cipher.encrypt(u.mfaSecret), enabledAt: u.mfaEnabledAt ?? null, lastStep: u.mfaLastStep ?? null } : null,
           recoveryHashes: u.recoveryHashes ?? [], mfaRequired: u.mfaRequired ?? false, mfaGraceUntil: u.mfaGraceUntil ?? null,
+          passwordChangeRequired: u.passwordChangeRequired ?? false,
           createdAt: current?.createdAt ?? nowIso(), updatedAt: nowIso(),
         });
         for (const i of u.identities ?? []) {
@@ -233,7 +235,7 @@ async function run(event: AdminEvent, deps: Parameters<typeof admin>[1]): Promis
     case 'setPassword': {
       const u = await userOrFail(deps, event.realm, event.id);
       if (passwordProblem(event.password)) throw new AdminError('WEAK_PASSWORD', 'password must have at least 8 characters');
-      await store.putUser({ ...u, passwordHash: await hashPassword(event.password), updatedAt: nowIso() });
+      await store.putUser({ ...u, passwordHash: await hashPassword(event.password), passwordChangeRequired: !!event.temporary, updatedAt: nowIso() });
       await store.deleteByIndex('gsi3', `ACCOUNT#${event.realm}#${u.id}`);
       await store.audit(event.realm, 'PASSWORD_SET_BY_ADMIN', { userId: u.id }, settings.auditRetentionDays);
       return {};
@@ -298,6 +300,6 @@ const publicRealm = (r: Realm) => ({ ...r, social: Object.fromEntries(Object.ent
 const publicClient = (c: ClientRecord) => ({ ...c, secretEnc: undefined, confidential: !!c.secretEnc, hook: c.hook ? { ...c.hook, secretEnc: undefined, hasSecret: !!c.hook.secretEnc } : null });
 const publicUser = (u: UserRecord) => ({
   id: u.id, realm: u.realm, email: u.email, name: u.name, status: u.status, emailVerified: u.emailVerified, mfaEnabled: !!u.mfa?.enabledAt,
-  mfaRequired: !!u.mfaRequired, mfaGraceUntil: u.mfaGraceUntil ?? null,
+  mfaRequired: !!u.mfaRequired, mfaGraceUntil: u.mfaGraceUntil ?? null, passwordChangeRequired: !!u.passwordChangeRequired,
   hasPassword: !!u.passwordHash, createdAt: u.createdAt, updatedAt: u.updatedAt,
 });

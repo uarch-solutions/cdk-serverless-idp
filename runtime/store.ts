@@ -53,6 +53,8 @@ export interface UserRecord {
   mfaRequired?: boolean;
   /** Until then, a person who must enroll may still skip the enrollment at sign-in. */
   mfaGraceUntil?: string | null;
+  /** Temporary password (set by an administrator): a new one is chosen at the next sign-in. */
+  passwordChangeRequired?: boolean;
   createdAt: string; updatedAt: string;
 }
 export interface IdentityRecord { realm: string; userId: string; provider: string; subject: string; email: string | null; createdAt: string }
