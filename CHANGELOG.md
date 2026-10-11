@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0
+
+- Second factor required per person (`mfaRequired`), with a grace period (`mfaGraceUntil`) during which the enrollment can be postponed.
+- Temporary passwords (`setPassword` with `temporary: true`, or `passwordChangeRequired`): a new password is chosen at the next sign-in.
+- One social-login callback for every realm (`<url>/federated/callback/<provider>`): register a single redirect URI at Google and Facebook.
+- Admin: pre-hashed argon2 passwords in `upsertUser` and `addRedirectUris`.
+
 ## 0.1.0
 
 - First release: the `ServerlessIdp` construct. A multi-tenant OpenID Connect provider on Lambda and DynamoDB, with:
