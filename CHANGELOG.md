@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.0
+
+- Checked against the OpenID Foundation conformance suite (Basic OP and Config OP plans) in CI; `conformance/run.sh`
+  runs it on any machine with Docker (see `conformance/README.md`).
+- **Changed:** without `resource`, the access token is the standard one for the userinfo endpoint. An application that
+  wants the ES256 JWT with its hook claims asks for `resource=urn:idp:app:<clientId>` in the authorization and token
+  requests. Before, every access token was that JWT, which the userinfo endpoint refuses.
+- RS256 ID tokens (OpenID Connect requires every provider to support them); ES256 stays the default. New installations
+  get an RSA key; `bootstrap` (run on every deployment) adds one to existing installations; `rotateKeys` rotates both.
+- Per application: `requirePkce: false` (confidential applications only) and `tokenEndpointAuthMethod:
+  'client_secret_post'`.
+- The `claims` request parameter is supported.
+
 ## 0.3.0
 
 - Realms and applications stay in memory while the Lambda is warm. Every change through the admin API bumps one

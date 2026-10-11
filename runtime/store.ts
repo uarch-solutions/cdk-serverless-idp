@@ -43,6 +43,13 @@ export interface ClientRecord {
   /** Realms this application may sign in to (`*` = all). */
   realms: string[];
   firstParty: boolean; grantTypes: string[]; scope: string; claimPrefix: string; hook: Hook | null;
+  /**
+   * PKCE on every authorization request (the default). Only a confidential application that cannot send it (e.g. the
+   * OpenID Basic OP certification profile) turns it off; public applications always need it.
+   */
+  requirePkce?: boolean;
+  /** How a confidential application authenticates at the token endpoint. @default 'client_secret_basic' */
+  tokenEndpointAuthMethod?: 'client_secret_basic' | 'client_secret_post';
   createdAt: string; updatedAt: string;
 }
 export interface UserRecord {

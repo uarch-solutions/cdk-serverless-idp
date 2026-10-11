@@ -80,23 +80,25 @@ afterAll(async () => {
 });
 
 describe('OpenID Provider', () => {
-  it('discovery and JWKS per realm, ES256 only, PKCE required', async () => {
+  it('discovery and JWKS per realm, ES256 by default and RS256 (required by OpenID Connect), PKCE', async () => {
     const d = await (await fetch(`${idp.base}/realms/acme/.well-known/openid-configuration`)).json();
     expect(d.issuer).toBe(`${idp.base}/realms/acme`);
     expect(d.code_challenge_methods_supported).toEqual(['S256']);
-    expect(d.id_token_signing_alg_values_supported).toEqual(['ES256']);
+    expect(d.id_token_signing_alg_values_supported).toEqual(['ES256', 'RS256']);
+    expect(d.claims_parameter_supported).toBe(true);
     const jwks = await (await fetch(d.jwks_uri)).json();
     expect(jwks.keys[0]).toMatchObject({ kty: 'EC', crv: 'P-256', alg: 'ES256' });
-    expect(jwks.keys[0].d).toBeUndefined(); // public part only
+    expect(jwks.keys[1]).toMatchObject({ kty: 'RSA', alg: 'RS256' });
+    for (const k of jwks.keys) for (const p of ['d', 'p', 'q', 'dp', 'dq', 'qi']) expect(k[p]).toBeUndefined(); // public parts only
     expect((await fetch(`${idp.base}/realms/missing/.well-known/openid-configuration`)).status).toBe(404);
   });
 
   it('full sign-in with a migrated node-argon2 password: code + PKCE → JWT access token with the hook claims (prefix only)', async () => {
     const b = new Browser();
-    const { page, verifier } = await signIn(b, 'acme', 'ana@acme.test', 'Senha-Antiga-123');
+    const { page, verifier } = await signIn(b, 'acme', 'ana@acme.test', 'Senha-Antiga-123', { extra: { resource: 'urn:idp:app:app' } });
     expect(page.url.startsWith(APP_CB)).toBe(true);
     expect(new URL(page.url).searchParams.get('state')).toBe('st-1');
-    const res = await token('acme', { grant_type: 'authorization_code', code: codeOf(page.url)!, redirect_uri: APP_CB, code_verifier: verifier });
+    const res = await token('acme', { grant_type: 'authorization_code', code: codeOf(page.url)!, redirect_uri: APP_CB, code_verifier: verifier, resource: 'urn:idp:app:app' });
     const t = await res.json();
     expect(res.status).toBe(200);
     const jwks = createLocalJWKSet(await (await fetch(`${idp.base}/realms/acme/jwks`)).json());
@@ -112,6 +114,10 @@ describe('OpenID Provider', () => {
     // Refresh rotates; reusing the old refresh token revokes the whole family.
     const r1 = await (await token('acme', { grant_type: 'refresh_token', refresh_token: t.refresh_token })).json();
     expect(r1.access_token).toBeTruthy();
+    // Without `resource`: a standard access token for the userinfo endpoint.
+    const me = await fetch(`${idp.base}/realms/acme/me`, { headers: { authorization: `Bearer ${r1.access_token}` } });
+    expect(me.status).toBe(200);
+    expect(await me.json()).toMatchObject({ sub: '11111111-1111-4111-8111-111111111111', email: 'ana@acme.test' });
     expect(r1.refresh_token).not.toBe(t.refresh_token);
     const reuse = await token('acme', { grant_type: 'refresh_token', refresh_token: t.refresh_token });
     expect((await reuse.json()).error).toBe('invalid_grant');
@@ -125,6 +131,17 @@ describe('OpenID Provider', () => {
     const { page } = await signIn(b, 'acme', 'ana@acme.test', 'Senha-Antiga-123');
     const bad = await token('acme', { grant_type: 'authorization_code', code: codeOf(page.url)!, redirect_uri: APP_CB, code_verifier: pkce().verifier });
     expect((await bad.json()).error).toBe('invalid_grant');
+  });
+
+  it('a confidential application may turn PKCE off (OpenID Basic profile); a public one never', async () => {
+    const plain = await idp.admin({ action: 'putClient', client: { clientId: 'plain', redirectUris: [APP_CB], realms: ['acme'], firstParty: true, requirePkce: false } });
+    expect(plain.client.requirePkce).toBe(false);
+    const res = await fetch(`${idp.base}/realms/acme/auth?${new URLSearchParams({ client_id: 'plain', response_type: 'code', scope: 'openid', redirect_uri: APP_CB })}`, { redirect: 'manual' });
+    expect(new URL(res.headers.get('location')!, idp.base).searchParams.get('error')).toBeNull();
+    const pub = await idp.admin({ action: 'putClient', client: { clientId: 'spa', confidential: false, redirectUris: [APP_CB], realms: ['acme'], requirePkce: false } });
+    expect(pub.client.requirePkce).toBe(true);
+    const r2 = await fetch(`${idp.base}/realms/acme/auth?${new URLSearchParams({ client_id: 'spa', response_type: 'code', scope: 'openid', redirect_uri: APP_CB })}`, { redirect: 'manual' });
+    expect(new URL(r2.headers.get('location')!).searchParams.get('error')).toBe('invalid_request');
   });
 
   it('wrong password, disabled person and unknown e-mail get the same answer; 10 failures lock the e-mail', async () => {

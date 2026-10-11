@@ -19,6 +19,7 @@ export function buildProvider(realm: Realm, deps: Deps): Provider {
   const { store, cipher, secret, settings } = deps;
   const t = strings(realm.locale);
   const cookieName = (k: string) => `_${k}_${realm.id}`.slice(0, 64);
+  const signingAlgs: ('ES256' | 'RS256')[] = secret.jwks.keys.some((k) => k.kty === 'RSA') ? ['ES256', 'RS256'] : ['ES256'];
 
   const configuration: Configuration = {
     adapter: adapterFactory(store, deps.config, cipher, realm.id) as unknown as Configuration['adapter'],
@@ -34,7 +35,9 @@ export function buildProvider(realm: Realm, deps: Deps): Provider {
     claims: { openid: ['sub', 'amr', 'acr', 'auth_time'], email: ['email', 'email_verified'], profile: ['name'] },
     scopes: ['openid', 'offline_access', 'email', 'profile'],
     conformIdTokenClaims: false,
-    pkce: { required: () => true },
+    // PKCE always, except for a confidential application registered without it (see ClientRecord.requirePkce).
+    extraClientMetadata: { properties: ['require_pkce'] },
+    pkce: { required: (_ctx, client) => (client as unknown as { require_pkce?: boolean }).require_pkce !== false },
     rotateRefreshToken: true,
     ttl: {
       AccessToken: ACCESS_TOKEN_TTL, AuthorizationCode: 60, ClientCredentials: ACCESS_TOKEN_TTL, IdToken: ACCESS_TOKEN_TTL,
@@ -74,13 +77,16 @@ export function buildProvider(realm: Realm, deps: Deps): Provider {
     },
     features: {
       devInteractions: { enabled: false },
+      claimsParameter: { enabled: true },
       revocation: { enabled: true },
       introspection: { enabled: true },
       clientCredentials: { enabled: true },
       resourceIndicators: {
         enabled: true,
-        defaultResource: (_ctx, client) => appResource(client.clientId),
-        useGrantedResource: () => true,
+        // Standard OpenID Connect by default: without `resource`, the access token is for the userinfo endpoint.
+        // With `resource=urn:idp:app:<clientId>` it is an ES256 JWT for the application, with the hook claims.
+        defaultResource: (_ctx, _client, oneOf) => oneOf,
+        useGrantedResource: () => false,
         getResourceServerInfo: async (_ctx, resource, client) => {
           if (resource !== appResource(client.clientId)) throw new errors.InvalidTarget();
           const app = await deps.config.client(client.clientId);
@@ -113,7 +119,8 @@ export function buildProvider(realm: Realm, deps: Deps): Provider {
       ctx.body = page({ realm, locale: realm.locale, title: t.errorTitle, body: message({ title: t.errorTitle, text: `${text}${out.error ? ` (${esc(out.error)})` : ''}`, error: true }) });
     },
     discovery: { service_documentation: 'https://github.com/uarch-solutions/cdk-serverless-idp' },
-    enabledJWA: { idTokenSigningAlgValues: ['ES256'], userinfoSigningAlgValues: ['ES256'] },
+    // ES256 by default; RS256 too (required by OpenID Connect) when the installation has an RSA key (all since 0.4.0).
+    enabledJWA: { idTokenSigningAlgValues: signingAlgs, userinfoSigningAlgValues: signingAlgs },
   };
 
   const provider = new Provider(issuerOf(settings.issuerBase, realm.id), configuration);

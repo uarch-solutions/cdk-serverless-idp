@@ -11,12 +11,13 @@ export function clientMetadata(c: ClientRecord, cipher: Cipher) {
     client_id: c.clientId,
     client_name: c.name,
     ...(confidential ? { client_secret: cipher.decrypt(c.secretEnc!) } : {}),
-    token_endpoint_auth_method: confidential ? 'client_secret_basic' : 'none',
+    token_endpoint_auth_method: confidential ? c.tokenEndpointAuthMethod ?? 'client_secret_basic' : 'none',
     redirect_uris: c.redirectUris,
     post_logout_redirect_uris: c.postLogoutRedirectUris,
     grant_types: c.grantTypes,
     response_types: c.grantTypes.includes('authorization_code') ? ['code'] : [],
     scope: c.scope,
+    require_pkce: c.requirePkce !== false || !confidential,
   };
 }
 

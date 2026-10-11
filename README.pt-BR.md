@@ -17,10 +17,12 @@ dados de instância. Foi pensado para quem está criando o próprio SaaS e quer 
   vai no token. O provedor não conhece o seu negócio: papéis, planos e permissões ficam na aplicação.
 - **Padrão, não criptografia caseira.** É construído sobre o
   [`oidc-provider`](https://github.com/panva/node-oidc-provider), certificado pela OpenID Foundation:
-  - PKCE obrigatório;
+  - PKCE obrigatório (só uma aplicação confidencial que não consegue enviá-lo pode desligar);
   - rotação do token de renovação com detecção de reuso;
-  - chaves ES256 com rotação;
+  - chaves ES256 (e RS256) com rotação;
   - revogação e logout padrão.
+- **Conferido pela suíte oficial.** A CI roda a suíte de conformidade da OpenID Foundation (Basic OP e Config OP). Para
+  rodar na sua máquina, veja [conformance/](conformance/README.md).
 
 ## Começando
 

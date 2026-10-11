@@ -49,10 +49,18 @@ export function newSigningKey() {
   return { ...privateKey.export({ format: 'jwk' }), kid: randomToken(8), alg: 'ES256', use: 'sig' } as Record<string, unknown>;
 }
 
-/** First secret: one signing key, two cookie keys, the data key and the CloudFront origin header value. */
+/** RS256 key: OpenID Connect requires every provider to support RS256 ID tokens; ES256 stays the default. */
+export function newRsaSigningKey() {
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  return { ...privateKey.export({ format: 'jwk' }), kid: randomToken(8), alg: 'RS256', use: 'sig' } as Record<string, unknown>;
+}
+
+const isRsa = (k: Record<string, unknown>) => k.kty === 'RSA';
+
+/** First secret: one ES256 and one RS256 signing key, two cookie keys, the data key and the CloudFront origin header value. */
 export function newRuntimeSecret(originVerify?: string): RuntimeSecret {
   return {
-    jwks: { keys: [newSigningKey()] },
+    jwks: { keys: [newSigningKey(), newRsaSigningKey()] },
     cookieKeys: [randomToken(32), randomToken(32)],
     dataKey: randomBytes(32).toString('base64'),
     ...(originVerify ? { originVerify } : {}),
@@ -76,9 +84,15 @@ async function run(event: AdminEvent, deps: Parameters<typeof admin>[1]): Promis
   if (event.action === 'bootstrap') {
     const current = await deps.secretIo.read();
     if (current) {
-      // Keeps the keys; only aligns the CloudFront origin header with the deployed value.
-      if (deps.originVerify && current.originVerify !== deps.originVerify) await deps.secretIo.write({ ...current, originVerify: deps.originVerify });
-      return { created: false };
+      // Keeps the keys; adds the RS256 key to installations made before 0.4.0 and aligns the CloudFront origin header.
+      const addRsa = !current.jwks.keys.some(isRsa);
+      if (addRsa || (deps.originVerify && current.originVerify !== deps.originVerify)) {
+        await deps.secretIo.write({
+          ...current, ...(deps.originVerify ? { originVerify: deps.originVerify } : {}),
+          jwks: addRsa ? { keys: [...current.jwks.keys, newRsaSigningKey()] } : current.jwks,
+        });
+      }
+      return { created: false, ...(addRsa ? { addedRsaKey: true } : {}) };
     }
     await deps.secretIo.write(newRuntimeSecret(deps.originVerify));
     return { created: true };
@@ -86,8 +100,10 @@ async function run(event: AdminEvent, deps: Parameters<typeof admin>[1]): Promis
   if (event.action === 'rotateKeys') {
     const current = await deps.secretIo.read();
     if (!current) throw new AdminError('NOT_BOOTSTRAPPED', 'run bootstrap first');
-    // New key signs; the previous one stays published to verify tokens issued before.
-    const keys = [newSigningKey(), current.jwks.keys[0]!];
+    // New keys sign; the previous ones stay published to verify tokens issued before.
+    const previousEc = current.jwks.keys.find((k) => !isRsa(k));
+    const previousRsa = current.jwks.keys.find(isRsa);
+    const keys = [newSigningKey(), newRsaSigningKey(), ...(previousEc ? [previousEc] : []), ...(previousRsa ? [previousRsa] : [])];
     await deps.secretIo.write({ ...current, jwks: { keys }, cookieKeys: [randomToken(32), current.cookieKeys[0]!] });
     return { kids: keys.map((k) => k.kid) };
   }
@@ -128,6 +144,9 @@ async function run(event: AdminEvent, deps: Parameters<typeof admin>[1]): Promis
     case 'putClient': {
       const input = event.client;
       if (!CLIENT_ID.test(input.clientId)) throw new AdminError('INVALID_CLIENT', 'client id: lowercase letters, digits, . _ -');
+      if (input.tokenEndpointAuthMethod && !['client_secret_basic', 'client_secret_post'].includes(input.tokenEndpointAuthMethod)) {
+        throw new AdminError('INVALID_CLIENT', 'tokenEndpointAuthMethod: client_secret_basic or client_secret_post');
+      }
       const current = await store.client(input.clientId);
       const confidential = input.confidential ?? (current ? !!current.secretEnc : true);
       let secret: string | undefined;
@@ -146,6 +165,8 @@ async function run(event: AdminEvent, deps: Parameters<typeof admin>[1]): Promis
         clientId: input.clientId, name: input.name ?? current?.name ?? input.clientId, secretEnc, redirectUris,
         postLogoutRedirectUris: input.postLogoutRedirectUris ?? current?.postLogoutRedirectUris ?? [],
         realms: input.realms ?? current?.realms ?? [], firstParty: input.firstParty ?? current?.firstParty ?? false,
+        requirePkce: secretEnc ? input.requirePkce ?? current?.requirePkce ?? true : true,
+        tokenEndpointAuthMethod: input.tokenEndpointAuthMethod ?? current?.tokenEndpointAuthMethod ?? 'client_secret_basic',
         grantTypes: input.grantTypes ?? current?.grantTypes ?? ['authorization_code', 'refresh_token'],
         scope: input.scope ?? current?.scope ?? 'openid email profile offline_access', claimPrefix: input.claimPrefix ?? current?.claimPrefix ?? input.clientId,
         hook, createdAt: current?.createdAt ?? nowIso(), updatedAt: nowIso(),

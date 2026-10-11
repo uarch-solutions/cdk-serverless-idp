@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { admin, newSigningKey } from '../runtime/admin.js';
+import type { RuntimeSecret } from '../runtime/deps.js';
 import { describe, expect, it } from 'vitest';
 import { base32Decode, base32Encode, Cipher, hookSignature, hotp, recoveryHash, verifyTotp } from '../runtime/crypto.js';
 import { profileFromIdToken } from '../runtime/federation.js';
@@ -81,5 +83,37 @@ describe('views', () => {
     expect(html).not.toContain('<b>X</b>');
     expect(html).not.toContain('javascript:');
     expect(html).toContain('--brand:#2563eb'); // invalid color falls back
+  });
+});
+
+describe('signing keys', () => {
+  const run = async (action: 'bootstrap' | 'rotateKeys', current: RuntimeSecret | null) => {
+    let written: RuntimeSecret | null = null;
+    const r = await admin({ action } as never, {
+      secretIo: { read: async () => current, write: async (s) => { written = s; } }, secret: current, cipher: null,
+    } as never);
+    return { r, written: written as RuntimeSecret | null };
+  };
+  const old = (): RuntimeSecret => ({ jwks: { keys: [newSigningKey()] }, cookieKeys: ['a', 'b'], dataKey: 'k' });
+
+  it('a new installation has an ES256 and an RS256 key', async () => {
+    const { written } = await run('bootstrap', null);
+    expect(written!.jwks.keys.map((k) => k.alg)).toEqual(['ES256', 'RS256']);
+  });
+
+  it('bootstrap adds the RS256 key to an installation made before 0.4.0, keeping its keys; then it is a no-op', async () => {
+    const before = old();
+    const { r, written } = await run('bootstrap', before);
+    expect(r).toMatchObject({ ok: true, created: false, addedRsaKey: true });
+    expect(written!.jwks.keys[0]).toEqual(before.jwks.keys[0]);
+    expect(written!.jwks.keys[1]).toMatchObject({ kty: 'RSA', alg: 'RS256' });
+    expect((await run('bootstrap', written)).written).toBeNull();
+  });
+
+  it('rotation makes new keys of both kinds and keeps the previous ones to verify', async () => {
+    const { written: first } = await run('bootstrap', null);
+    const { written } = await run('rotateKeys', first);
+    expect(written!.jwks.keys.map((k) => k.alg)).toEqual(['ES256', 'RS256', 'ES256', 'RS256']);
+    expect(written!.jwks.keys.slice(2)).toEqual(first!.jwks.keys);
   });
 });

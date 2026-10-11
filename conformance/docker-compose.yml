@@ -1,0 +1,54 @@
+# OpenID Foundation conformance suite (prebuilt images) against this provider (TD-079). See conformance/run.sh.
+services:
+  dynamodb:
+    image: amazon/dynamodb-local:latest
+    command: -jar DynamoDBLocal.jar -inMemory
+  idp:
+    image: node:24-bookworm-slim
+    working_dir: /app
+    volumes:
+      - ..:/app
+    environment:
+      ISSUER_BASE: https://idp:3443
+      DYNAMO_ENDPOINT: http://dynamodb:8000
+      CONFIG_OUT: /app/conformance/out/config.json
+      TLS_KEY: /app/conformance/out/idp.key
+      TLS_CERT: /app/conformance/out/idp.crt
+      NODE_TLS_REJECT_UNAUTHORIZED: "0" # the suite's own callback host uses a self-signed certificate too
+    command: npx tsx conformance/server.mts
+    depends_on: [dynamodb]
+  mongodb:
+    image: mongo:6.0.13
+  server:
+    image: registry.gitlab.com/openid/conformance-suite:${SUITE_TAG:-release-v5.3.2}
+    environment:
+      BASE_URL: https://localhost.emobix.co.uk:8443
+      BASE_MTLS_URL: https://localhost.emobix.co.uk:8444
+      MONGODB_HOST: mongodb
+      SPRING_PROFILES_ACTIVE: dev
+      # The suite's own login (unused in dev mode) still needs values to start.
+      OIDC_GOOGLE_CLIENTID: google-client
+      OIDC_GOOGLE_SECRET: google-secret
+      OIDC_GITLAB_CLIENTID: gitlab-client
+      OIDC_GITLAB_SECRET: gitlab-secret
+    depends_on: [mongodb, idp]
+  nginx:
+    image: registry.gitlab.com/openid/conformance-suite/nginx:${SUITE_TAG:-release-v5.3.2}
+    ports:
+      - "8443:8443"
+      - "8444:8444"
+    networks:
+      default:
+        aliases: [localhost.emobix.co.uk]
+    depends_on: [server]
+  runner:
+    image: python:3.12-slim
+    profiles: [runner]
+    working_dir: /conformance
+    volumes:
+      - .:/conformance
+    environment:
+      CONFORMANCE_SERVER: https://localhost.emobix.co.uk:8443/
+      CONFORMANCE_SERVER_MTLS: https://localhost.emobix.co.uk:8444/
+      CONFORMANCE_DEV_MODE: "1"
+    depends_on: [nginx]

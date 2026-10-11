@@ -1,0 +1,31 @@
+# OpenID Foundation conformance suite (Basic OP and Config OP plans) against this provider. Fails when a test fails
+# beyond conformance/expected-failures.json. Same script as a local run: conformance/run.sh (see conformance/README.md).
+name: OpenID conformance
+on:
+  push: { branches: [main] }
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  conformance:
+    # The suite's prebuilt images are x86-64.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - run: ./conformance/run.sh
+      - name: Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-results
+          path: |
+            conformance/out/*.zip
+            conformance/out/idp.log
+          retention-days: 30

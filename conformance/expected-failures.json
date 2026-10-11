@@ -1,0 +1,38 @@
+[
+  {
+    "test-name": "oidcc-scope-email",
+    "variant": "*",
+    "configuration-filename": "*config.json",
+    "current-block": "*",
+    "condition": "EnsureIdTokenDoesNotContainEmailForScopeEmail",
+    "expected-result": "warning",
+    "comment": "The email address goes in the ID token on purpose: applications (e.g. the first-party SaaS) read it there without a userinfo call. A 'should', not a 'must'."
+  },
+  {
+    "test-name": "oidcc-alternate-happy-flow",
+    "variant": "*",
+    "configuration-filename": "*config.json",
+    "current-block": "*",
+    "condition": "EnsureIdTokenDoesNotContainEmailForScopeEmail",
+    "expected-result": "warning",
+    "comment": "The email address goes in the ID token on purpose: applications (e.g. the first-party SaaS) read it there without a userinfo call. A 'should', not a 'must'."
+  },
+  {
+    "test-name": "oidcc-scope-profile",
+    "variant": "*",
+    "configuration-filename": "*config.json",
+    "current-block": "*",
+    "condition": "VerifyScopesReturnedInUserInfoClaims",
+    "expected-result": "warning",
+    "comment": "Only 'name' is kept for a person (no given/family name, picture, locale...): the profile scope returns what exists. A 'should'."
+  },
+  {
+    "test-name": "oidcc-ensure-request-with-acr-values-succeeds",
+    "variant": "*",
+    "configuration-filename": "*config.json",
+    "current-block": "*",
+    "condition": "ValidateIdTokenACRClaimAgainstAcrValuesRequest",
+    "expected-result": "warning",
+    "comment": "No authentication context classes are defined (amr tells password or password + one-time code). A 'should'."
+  }
+]

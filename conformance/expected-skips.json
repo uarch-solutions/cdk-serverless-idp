@@ -1,0 +1,26 @@
+[
+  {
+    "test-name": "oidcc-scope-address",
+    "variant": "*",
+    "configuration-filename": "*config.json",
+    "comment": "No address claim is kept for a person."
+  },
+  {
+    "test-name": "oidcc-scope-phone",
+    "variant": "*",
+    "configuration-filename": "*config.json",
+    "comment": "No phone claim is kept for a person."
+  },
+  {
+    "test-name": "oidcc-scope-all",
+    "variant": "*",
+    "configuration-filename": "*config.json",
+    "comment": "Needs the address and phone scopes."
+  },
+  {
+    "test-name": "oidcc-unsigned-request-object-supported-correctly-or-rejected-as-unsupported",
+    "variant": "*",
+    "configuration-filename": "*config.json",
+    "comment": "Request objects are not supported (allowed by the specification)."
+  }
+]

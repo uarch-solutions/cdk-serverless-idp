@@ -15,7 +15,8 @@ instance. It is built for teams starting their own SaaS who want a safe path to 
   provider itself knows nothing about your domain: roles, plans and permissions stay in your application.
 - **Standards, not homemade crypto.** Built on [`oidc-provider`](https://github.com/panva/node-oidc-provider), certified
   by the OpenID Foundation. Authorization code with **mandatory PKCE**, refresh token rotation with **reuse detection**,
-  ES256 keys with rotation, revocation, introspection and RP-initiated logout.
+  ES256 keys (and RS256) with rotation, revocation, introspection and RP-initiated logout. Checked against the OpenID
+  Foundation conformance suite (Basic OP and Config OP) in CI: see [conformance/](conformance/README.md) to run it yourself.
 
 ```mermaid
 flowchart LR
@@ -84,7 +85,9 @@ it is not shown again (`rotateClientSecret` makes a new one).
 
 The hook runs at the end of every sign-in and on every access token, including refreshes. A role change or a cancelled
 plan therefore applies at the next refresh, which happens within 15 minutes. Only claims with the application's prefix
-are kept. A hook that fails or times out (2 s by default, up to 10 s for applications with slow cold starts) denies the sign-in, unless the application sets `onError: "allow"`.
+are kept. The claims go in the access token for the application, which it gets by asking for its resource
+(`resource=urn:idp:app:<clientId>` in the authorization and token requests): an ES256 JWT with the application as
+audience. Without `resource`, the access token is the standard one for the userinfo endpoint. A hook that fails or times out (2 s by default, up to 10 s for applications with slow cold starts) denies the sign-in, unless the application sets `onError: "allow"`.
 
 ## Cost
 
@@ -105,6 +108,10 @@ the secrets.
 - No self sign-up: applications create people through the admin API (invites), and social login only signs in
   existing people. If the realm allows it, it links them by verified e-mail.
 - One provider per region and stack.
+- PKCE is mandatory. Only a confidential application that cannot send it may turn it off (`requirePkce: false`, as in the
+  OpenID Basic OP profile).
+- The authorization endpoint accepts GET only (the `oidc-provider` default): POST would need a `SameSite=None` session
+  cookie, weaker against cross-site requests. Request objects are not supported.
 - A sign-in round trip (six HTTP hops plus argon2id) takes about 2.5 s on a cold start and well under that warm.
 
 ## Prior art
