@@ -221,6 +221,15 @@ describe('OpenID Provider', () => {
     expect((await idp.admin({ action: 'getUser', realm: 'acme', id: created.user.id })).user).toMatchObject({ hasPassword: true, emailVerified: true });
   });
 
+  it('admin: a pre-hashed password replaces the current one (and ends sessions); redirect URIs are added, never replaced', async () => {
+    const u = await idp.admin({ action: 'upsertUser', realm: 'acme', user: { email: 'eva@acme.test', name: 'Eva', passwordHash: PORTAL_HASH } });
+    expect((await signIn(new Browser(), 'acme', 'eva@acme.test', 'Senha-Antiga-123')).page.url.startsWith(APP_CB)).toBe(true);
+    expect((await idp.admin({ action: 'upsertUser', realm: 'acme', user: { id: u.user.id, email: 'eva@acme.test', name: 'Eva', passwordHash: 'plain' } })).error).toBe('INVALID_HASH');
+    const r = await idp.admin({ action: 'addRedirectUris', clientId: 'app', redirectUris: ['https://b.example/cb', APP_CB], postLogoutRedirectUris: ['https://b.example/'] });
+    expect(r.redirectUris).toBe(2);
+    expect((await idp.admin({ action: 'getClient', clientId: 'app' })).client.redirectUris).toEqual([APP_CB, 'https://b.example/cb']);
+  });
+
   it('account console: change password and turn on the second factor with re-authentication', async () => {
     const b = new Browser();
     let page = await b.follow(`${idp.base}/realms/acme/account`, idp.base);

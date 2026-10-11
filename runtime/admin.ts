@@ -17,7 +17,8 @@ export type AdminEvent =
   | { action: 'putClient'; client: Partial<Omit<ClientRecord, 'secretEnc' | 'hook'>> & { clientId: string; confidential?: boolean; hook?: (Omit<Hook, 'secretEnc'> & { secret?: string }) | null } }
   | { action: 'rotateClientSecret'; clientId: string }
   | { action: 'getClient'; clientId: string }
-  | { action: 'upsertUser'; realm: string; user: { id?: string; email: string; name: string; status?: UserRecord['status']; emailVerified?: boolean } }
+  | { action: 'upsertUser'; realm: string; user: { id?: string; email: string; name: string; status?: UserRecord['status']; emailVerified?: boolean; passwordHash?: string } }
+  | { action: 'addRedirectUris'; clientId: string; redirectUris?: string[]; postLogoutRedirectUris?: string[] }
   | { action: 'importUsers'; realm: string; users: ImportUser[] }
   | { action: 'getUser'; realm: string; id?: string; email?: string }
   | { action: 'setPassword'; realm: string; id: string; password: string }
@@ -151,6 +152,19 @@ async function run(event: AdminEvent, deps: Parameters<typeof admin>[1]): Promis
       await store.putClient(client);
       return { client: publicClient(client), ...(secret ? { clientSecret: secret } : {}) };
     }
+    case 'addRedirectUris': {
+      // Adds without a read-modify-write on the caller side (one realm at a time joins a shared application).
+      const current = await store.client(event.clientId);
+      if (!current) throw new AdminError('CLIENT_NOT_FOUND', 'client not found');
+      for (const u of [...(event.redirectUris ?? []), ...(event.postLogoutRedirectUris ?? [])]) {
+        if (!/^https:\/\//.test(u) && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//.test(u)) throw new AdminError('INVALID_REDIRECT_URI', `redirect uri must be https: ${u}`);
+      }
+      const merge = (a: string[], b?: string[]) => [...new Set([...a, ...(b ?? [])])];
+      await store.putClient({
+        ...current, redirectUris: merge(current.redirectUris, event.redirectUris), postLogoutRedirectUris: merge(current.postLogoutRedirectUris, event.postLogoutRedirectUris), updatedAt: nowIso(),
+      });
+      return { redirectUris: merge(current.redirectUris, event.redirectUris).length };
+    }
     case 'rotateClientSecret': {
       const current = await store.client(event.clientId);
       if (!current) throw new AdminError('CLIENT_NOT_FOUND', 'client not found');
@@ -170,14 +184,17 @@ async function run(event: AdminEvent, deps: Parameters<typeof admin>[1]): Promis
       const current = event.user.id ? await store.user(event.realm, event.user.id) : byEmail;
       if (byEmail && current && byEmail.id !== current.id) throw new AdminError('EMAIL_IN_USE', 'another person in this realm uses this e-mail');
       if (byEmail && !current) throw new AdminError('EMAIL_IN_USE', 'another person in this realm uses this e-mail');
+      // A pre-hashed argon2 password (e.g. set by the application's administrator) replaces the current one.
+      if (event.user.passwordHash !== undefined && !event.user.passwordHash.startsWith('$argon2')) throw new AdminError('INVALID_HASH', 'only argon2 PHC hashes are accepted');
       const user: UserRecord = {
         id: current?.id ?? event.user.id ?? randomUUID(), realm: event.realm, email, name: event.user.name,
-        passwordHash: current?.passwordHash ?? null, status: event.user.status ?? current?.status ?? 'ACTIVE',
+        passwordHash: event.user.passwordHash ?? current?.passwordHash ?? null, status: event.user.status ?? current?.status ?? 'ACTIVE',
         emailVerified: current && current.email === email ? current.emailVerified || !!event.user.emailVerified : !!event.user.emailVerified,
         mfa: current?.mfa ?? null, recoveryHashes: current?.recoveryHashes ?? [], createdAt: current?.createdAt ?? nowIso(), updatedAt: nowIso(),
       };
       await store.putUser(user);
-      if (current && current.status === 'ACTIVE' && user.status === 'DISABLED') await store.deleteByIndex('gsi3', `ACCOUNT#${event.realm}#${user.id}`);
+      const passwordChanged = !!event.user.passwordHash && current?.passwordHash !== event.user.passwordHash;
+      if ((current && current.status === 'ACTIVE' && user.status === 'DISABLED') || (current && passwordChanged)) await store.deleteByIndex('gsi3', `ACCOUNT#${event.realm}#${user.id}`);
       await store.audit(event.realm, current ? 'USER_UPDATED' : 'USER_CREATED', { userId: user.id, by: 'admin' }, settings.auditRetentionDays);
       return { user: publicUser(user), created: !current };
     }

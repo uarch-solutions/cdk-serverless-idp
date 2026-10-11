@@ -1,0 +1,5 @@
+cdk-serverless-idp
+Copyright 2026 uarch-solutions
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+It bundles oidc-provider (MIT, Filip Skokan), koa (MIT), hash-wasm (MIT), qrcode-generator (MIT) and serverless-http (MIT).
