@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0
+
+- Realms and applications stay in memory while the Lambda is warm. Every change through the admin API bumps one
+  version item; the web function checks it at most every 30 s (`CONFIG_CHECK_MS`, one eventually consistent read of a
+  tiny item) instead of reading the realm and the application on every request. A redirect URI or realm an application
+  gained a moment ago is read again at once, so a new customer signs in right after it is created.
+- `countUsers` counts with `Select: COUNT` instead of reading every person.
+
 ## 0.2.1
 
 - Hook timeout up to 10 s (was 5 s): applications whose hook runs on a cold-starting function in a VPC need more than 3 s on the first call.

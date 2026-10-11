@@ -1,3 +1,4 @@
+import type { ConfigCache } from './config-cache.js';
 import type { ClientRecord, Store } from './store.js';
 import type { Cipher } from './crypto.js';
 
@@ -22,7 +23,7 @@ export function clientMetadata(c: ClientRecord, cipher: Cipher) {
 export const clientAllowedIn = (c: ClientRecord, realm: string) => c.realms.includes('*') || c.realms.includes(realm);
 
 /** `oidc-provider` adapter on the DynamoDB table (one per model, bound to the realm). */
-export function adapterFactory(store: Store, cipher: Cipher, realm: string) {
+export function adapterFactory(store: Store, config: ConfigCache, cipher: Cipher, realm: string) {
   return class DynamoAdapter {
     constructor(private readonly model: string) {}
 
@@ -37,7 +38,9 @@ export function adapterFactory(store: Store, cipher: Cipher, realm: string) {
 
     async find(id: string) {
       if (this.model === 'Client') {
-        const c = await store.client(id);
+        let c = await config.client(id);
+        // Not allowed here in the copy in memory: the application may have just joined this realm.
+        if (c && !clientAllowedIn(c, realm)) c = await config.client(id, { reload: true });
         return c && clientAllowedIn(c, realm) ? clientMetadata(c, cipher) : undefined;
       }
       return store.oidcGet(this.model, id);

@@ -61,7 +61,7 @@ export function newRuntimeSecret(originVerify?: string): RuntimeSecret {
 
 export interface SecretIo { read(): Promise<RuntimeSecret | null>; write(s: RuntimeSecret): Promise<void> }
 
-export async function admin(event: AdminEvent, deps: Omit<Deps, 'secret' | 'cipher'> & { secret: RuntimeSecret | null; cipher: Cipher | null; secretIo: SecretIo; originVerify?: string }) {
+export async function admin(event: AdminEvent, deps: Omit<Deps, 'secret' | 'cipher' | 'config'> & { secret: RuntimeSecret | null; cipher: Cipher | null; secretIo: SecretIo; originVerify?: string }) {
   try {
     return { ok: true, ...(await run(event, deps)) };
   } catch (e) {
@@ -279,7 +279,7 @@ async function run(event: AdminEvent, deps: Parameters<typeof admin>[1]): Promis
     case 'audit':
       return { events: await store.auditTrail(event.realm, Math.min(event.limit ?? 100, 500)) };
     case 'countUsers':
-      return { count: (await store.usersOf(event.realm)).length };
+      return { count: await store.countUsers(event.realm) };
     default:
       throw new AdminError('UNKNOWN_ACTION', `unknown action ${(event as { action: string }).action}`);
   }

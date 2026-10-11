@@ -95,7 +95,8 @@ You pay for requests, not for time:
 - two Secrets Manager secrets;
 - SES e-mails.
 
-A few thousand sign-ins a month stay in cents, plus the secrets (about US$ 0.80/month). With no sign-ins, the bill is
+Realms and applications stay in the memory of a warm Lambda (a change applies within 30 s), so a sign-in mostly reads
+the person, the session and the codes. A few thousand sign-ins a month stay in cents, plus the secrets (about US$ 0.80/month). With no sign-ins, the bill is
 the secrets.
 
 ## Limits and choices

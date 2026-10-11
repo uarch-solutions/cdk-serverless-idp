@@ -32,16 +32,12 @@ export function createApp(deps: Deps) {
   const { store, settings } = deps;
   const app = new Koa();
   app.proxy = true;
-  const realms = new Map<string, { realm: Realm; at: number }>();
   const providers = new Map<string, { provider: Provider; version: string }>();
 
   async function realmOf(id: string): Promise<Realm> {
     if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(id)) throw new HttpError(404, 'realm not found');
-    const hit = realms.get(id);
-    if (hit && Date.now() - hit.at < settings.realmCacheMs) return hit.realm;
-    const realm = await store.realm(id);
+    const realm = await deps.config.realm(id);
     if (!realm || !realm.enabled) throw new HttpError(404, 'realm not found');
-    realms.set(id, { realm, at: Date.now() });
     return realm;
   }
 
@@ -110,7 +106,7 @@ export function createApp(deps: Deps) {
       const status = e instanceof HttpError ? e.status : 500;
       if (status === 500) console.error(JSON.stringify({ error: (e as Error).message, stack: (e as Error).stack, path: ctx.path }));
       const id = /^\/realms\/([^/]+)/.exec(ctx.path)?.[1];
-      const realm = id ? realms.get(id)?.realm ?? null : null;
+      const realm = id ? deps.config.peek(id) : null;
       const t = v.strings(realm?.locale ?? 'pt-BR');
       render(ctx as Ctx, realm, t.errorTitle, v.message({ title: t.errorTitle, text: status === 404 ? 'Not found' : t.errorTitle, error: true }), status);
     }
@@ -142,7 +138,7 @@ export function createApp(deps: Deps) {
 
   async function finishLogin(ctx: Ctx, realm: Realm, provider: Provider, details: Awaited<ReturnType<Provider['interactionDetails']>>, user: UserRecord, method: 'password' | 'google' | 'facebook', mfa: boolean) {
     const clientId = String(details.params.client_id ?? '');
-    const client = await store.client(clientId);
+    const client = await deps.config.client(clientId);
     const r = client
       ? await deps.hooks.call(client, { event: 'login', realm: realm.id, clientId, method, user: { sub: user.id, email: user.email, name: user.name, emailVerified: user.emailVerified } })
       : { allow: false, reason: 'unknown application', claims: {} };
@@ -190,7 +186,7 @@ export function createApp(deps: Deps) {
     if (!details || details.uid !== ctx.params.uid) return render(ctx, realm, t.errorTitle, v.message({ title: t.errorTitle, text: t.linkExpired, error: true }), 400);
     if (details.prompt.name === 'login') return loginPage(ctx, realm, details.uid, { email: typeof details.params.login_hint === 'string' ? details.params.login_hint : undefined });
     if (details.prompt.name === 'consent') {
-      const app = await store.client(String(details.params.client_id));
+      const app = await deps.config.client(String(details.params.client_id));
       if (app?.firstParty) return grantConsent(ctx, provider, details);
       const scopes = String(details.params.scope ?? 'openid').split(' ').filter(Boolean);
       return render(ctx, realm, t.consentTitle, v.consentForm(t, {
@@ -593,6 +589,14 @@ export function createApp(deps: Deps) {
     const realm = await realmOf(m[1]!);
     const provider = providerFor(realm);
     const prefix = `/realms/${realm.id}`;
+    // A redirect URI the application gained a moment ago (a new realm joining it) may be missing from the copy in
+    // memory: read the application again before oidc-provider refuses it.
+    const clientId = ctx.query.client_id;
+    const uri = ctx.query.redirect_uri ?? ctx.query.post_logout_redirect_uri;
+    if (typeof clientId === 'string' && typeof uri === 'string') {
+      const app = await deps.config.client(clientId);
+      if (app && !app.redirectUris.includes(uri) && !app.postLogoutRedirectUris.includes(uri)) await deps.config.client(clientId, { reload: true });
+    }
     // oidc-provider derives its mount path from `req.originalUrl` minus `req.url` (like koa-mount/express).
     (ctx.req as unknown as { originalUrl: string }).originalUrl = ctx.req.url!;
     ctx.req.url = ctx.req.url!.slice(prefix.length) || '/';

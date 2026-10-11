@@ -45,7 +45,8 @@ Você paga por uso, não por tempo:
 - dois segredos no Secrets Manager (cerca de US$ 0,80 por mês);
 - e-mails do SES.
 
-Sem ninguém entrando, a conta fica só nos segredos.
+Realms e aplicações ficam na memória da Lambda enquanto ela está ativa (uma mudança vale em até 30 s), então um login
+lê basicamente a pessoa, a sessão e os códigos. Sem ninguém entrando, a conta fica só nos segredos.
 
 ## Segurança
 

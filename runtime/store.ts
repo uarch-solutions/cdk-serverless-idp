@@ -16,6 +16,7 @@ import {
  * | client (app)    | CLIENT#<clientId>           | META                            |                                |                     |
  * | action token    | ACTION#<sha256>             | META                            |                                |                     |
  * | counter         | COUNT#<key>                 | META                            |                                |                     |
+ * | config version  | CONFIG                      | VERSION (n, bumped on changes)  |                                |                     |
  * | pending step    | STEP#<key>                  | META                            |                                |                     |
  * | OIDC model      | OIDC#<Model>#<id>           | META                            | GRANT#<grantId>                | ACCOUNT#<realm>#<sub>|
  *
@@ -87,15 +88,35 @@ export class Store {
   installation() { return this.get<{ issuerBase: string }>('INSTALL'); }
   async putInstallation(issuerBase: string) { await this.put({ pk: 'INSTALL', sk: 'META', data: { issuerBase } }); }
 
+  // ---- configuration version (bumped on every realm or application change; read by ConfigCache)
+
+  /** Eventually consistent on purpose: half the price, and a change shows up in well under the check interval. */
+  async configVersion(): Promise<number> {
+    const r = await this.doc.send(new GetCommand({ TableName: this.table, Key: { pk: 'CONFIG', sk: 'VERSION' } }));
+    return (r.Item?.n as number | undefined) ?? 0;
+  }
+
+  private async bumpConfig() {
+    await this.doc.send(new UpdateCommand({
+      TableName: this.table, Key: { pk: 'CONFIG', sk: 'VERSION' }, UpdateExpression: 'ADD #n :one', ExpressionAttributeNames: { '#n': 'n' }, ExpressionAttributeValues: { ':one': 1 },
+    }));
+  }
+
   // ---- realms
 
   realm(id: string) { return this.get<Realm>(`REALM#${id}`); }
-  async putRealm(r: Realm) { await this.put({ pk: `REALM#${r.id}`, sk: 'META', data: r }); }
+  async putRealm(r: Realm) {
+    await this.put({ pk: `REALM#${r.id}`, sk: 'META', data: r });
+    await this.bumpConfig();
+  }
 
   // ---- clients
 
   client(id: string) { return this.get<ClientRecord>(`CLIENT#${id}`); }
-  async putClient(c: ClientRecord) { await this.put({ pk: `CLIENT#${c.clientId}`, sk: 'META', data: c }); }
+  async putClient(c: ClientRecord) {
+    await this.put({ pk: `CLIENT#${c.clientId}`, sk: 'META', data: c });
+    await this.bumpConfig();
+  }
 
   // ---- users
 
@@ -202,6 +223,21 @@ export class Store {
       ScanIndexForward: false, Limit: limit,
     }));
     return (r.Items ?? []).map((i) => i.data as Record<string, unknown>);
+  }
+
+  /** Counts without reading the people (only keys are evaluated). */
+  async countUsers(realm: string): Promise<number> {
+    let count = 0;
+    let start: Record<string, unknown> | undefined;
+    do {
+      const r = await this.doc.send(new QueryCommand({
+        TableName: this.table, KeyConditionExpression: 'pk = :p AND begins_with(sk, :s)', ExpressionAttributeValues: { ':p': `REALM#${realm}`, ':s': 'USER#' },
+        Select: 'COUNT', ExclusiveStartKey: start,
+      }));
+      count += r.Count ?? 0;
+      start = r.LastEvaluatedKey;
+    } while (start);
+    return count;
   }
 
   async usersOf(realm: string): Promise<UserRecord[]> {

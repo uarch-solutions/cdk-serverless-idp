@@ -5,6 +5,7 @@ import { CreateTableCommand, DeleteTableCommand, DynamoDBClient } from '@aws-sdk
 import { admin, newRuntimeSecret, type AdminEvent } from '../../runtime/admin.js';
 import { createApp } from '../../runtime/app.js';
 import { Cipher } from '../../runtime/crypto.js';
+import { ConfigCache } from '../../runtime/config-cache.js';
 import type { Deps, RuntimeSecret } from '../../runtime/deps.js';
 import { HookCaller } from '../../runtime/hooks.js';
 import { MemoryMailer } from '../../runtime/mail.js';
@@ -52,7 +53,7 @@ export interface Harness {
   close(): Promise<void>;
 }
 
-export async function startIdp(table: string): Promise<Harness> {
+export async function startIdp(table: string, opts: { configCheckMs?: number } = {}): Promise<Harness> {
   const client = dynamoClient();
   await createTable(client, table);
   const store = new Store(table, client);
@@ -62,8 +63,8 @@ export async function startIdp(table: string): Promise<Harness> {
   const server = createServer();
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  const settings = { tableName: table, secretId: 'test', issuerBase: base, productName: 'Test', auditRetentionDays: 30, realmCacheMs: 0 };
-  const deps: Deps = { settings, secret, store, cipher, mailer, hooks: new HookCaller(cipher, fetch), fetch, now: () => new Date() };
+  const settings = { tableName: table, secretId: 'test', issuerBase: base, productName: 'Test', auditRetentionDays: 30, configCheckMs: opts.configCheckMs ?? 0 };
+  const deps: Deps = { settings, secret, store, config: new ConfigCache(store, settings.configCheckMs), cipher, mailer, hooks: new HookCaller(cipher, fetch), fetch, now: () => new Date() };
   const app = createApp(deps);
   server.on('request', app.callback());
   return {

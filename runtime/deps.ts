@@ -1,4 +1,5 @@
 import { GetSecretValueCommand, PutSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
+import { ConfigCache } from './config-cache.js';
 import { Cipher } from './crypto.js';
 import { HookCaller } from './hooks.js';
 import { Mailer, SesMailer } from './mail.js';
@@ -24,14 +25,16 @@ export interface Settings {
   mailFrom?: string;
   productName: string;
   auditRetentionDays: number;
-  /** How long a warm Lambda trusts its copy of a realm (configuration changes apply after this). */
-  realmCacheMs: number;
+  /** How often a warm Lambda checks whether realms or applications changed (they stay in memory otherwise; 0 = no cache). */
+  configCheckMs: number;
 }
 
 export interface Deps {
   settings: Settings;
   secret: RuntimeSecret;
   store: Store;
+  /** Realms and applications for the web function (memory + version check). */
+  config: ConfigCache;
   cipher: Cipher;
   mailer: Mailer;
   hooks: HookCaller;
@@ -46,7 +49,7 @@ export const settingsFromEnv = (env = process.env): Settings => ({
   mailFrom: env.MAIL_FROM || undefined,
   productName: env.PRODUCT_NAME || 'Sign in',
   auditRetentionDays: Number(env.AUDIT_RETENTION_DAYS || 365),
-  realmCacheMs: Number(env.REALM_CACHE_MS || 30_000),
+  configCheckMs: Number(env.CONFIG_CHECK_MS || env.REALM_CACHE_MS || 30_000),
 });
 
 let cached: { at: number; value: RuntimeSecret } | undefined;
@@ -78,9 +81,10 @@ export async function depsFromEnv(): Promise<Deps> {
   const cipher = new Cipher(Buffer.from(secret.dataKey, 'base64'));
   // The CloudFront origin header comes from the deployment (dynamic reference), not from the runtime secret.
   if (process.env.ORIGIN_VERIFY) secret.originVerify = process.env.ORIGIN_VERIFY;
+  const store = new Store(settings.tableName);
   return {
-    settings, secret, cipher,
-    store: new Store(settings.tableName),
+    settings, secret, cipher, store,
+    config: new ConfigCache(store, settings.configCheckMs),
     mailer: new SesMailer(settings.mailFrom),
     hooks: new HookCaller(cipher, fetch),
     fetch,

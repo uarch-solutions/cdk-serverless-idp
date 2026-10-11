@@ -21,7 +21,7 @@ export function buildProvider(realm: Realm, deps: Deps): Provider {
   const cookieName = (k: string) => `_${k}_${realm.id}`.slice(0, 64);
 
   const configuration: Configuration = {
-    adapter: adapterFactory(store, cipher, realm.id) as unknown as Configuration['adapter'],
+    adapter: adapterFactory(store, deps.config, cipher, realm.id) as unknown as Configuration['adapter'],
     clients: [],
     clientDefaults: { grant_types: ['authorization_code'], id_token_signed_response_alg: 'ES256', response_types: ['code'], token_endpoint_auth_method: 'client_secret_basic' },
     jwks: secret.jwks as Configuration['jwks'],
@@ -53,7 +53,7 @@ export function buildProvider(realm: Realm, deps: Deps): Provider {
       const grantId = ctx.oidc.result?.consent?.grantId || ctx.oidc.session!.grantIdFor(ctx.oidc.client!.clientId);
       if (grantId) return ctx.oidc.provider.Grant.find(grantId);
       // First-party applications never show the consent screen.
-      const app = await store.client(ctx.oidc.client!.clientId);
+      const app = await deps.config.client(ctx.oidc.client!.clientId);
       if (!app?.firstParty) return undefined;
       const grant = new ctx.oidc.provider.Grant({ clientId: ctx.oidc.client!.clientId, accountId: ctx.oidc.session!.accountId! });
       grant.addOIDCScope(app.scope);
@@ -66,7 +66,7 @@ export function buildProvider(realm: Realm, deps: Deps): Provider {
       const accountId = (token as { accountId?: string }).accountId;
       const clientId = (token as { clientId?: string }).clientId;
       if (!accountId || !clientId) return { realm: realm.id };
-      const [app, user] = await Promise.all([store.client(clientId), store.user(realm.id, accountId)]);
+      const [app, user] = await Promise.all([deps.config.client(clientId), store.user(realm.id, accountId)]);
       if (!app || !user || user.status !== 'ACTIVE') throw new errors.InvalidGrant('account is not active');
       const r = await deps.hooks.call(app, { event: 'token', realm: realm.id, clientId, user: { sub: user.id, email: user.email, name: user.name, emailVerified: user.emailVerified } });
       if (!r.allow) throw new errors.InvalidGrant(r.reason ?? 'access denied by the application');
@@ -83,7 +83,7 @@ export function buildProvider(realm: Realm, deps: Deps): Provider {
         useGrantedResource: () => true,
         getResourceServerInfo: async (_ctx, resource, client) => {
           if (resource !== appResource(client.clientId)) throw new errors.InvalidTarget();
-          const app = await store.client(client.clientId);
+          const app = await deps.config.client(client.clientId);
           return {
             scope: app?.scope ?? 'openid',
             audience: client.clientId,
