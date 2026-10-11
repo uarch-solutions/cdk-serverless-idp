@@ -49,6 +49,10 @@ export interface UserRecord {
   emailVerified: boolean;
   mfa: { secretEnc: string; enabledAt: string | null; lastStep: number | null } | null;
   recoveryHashes: string[];
+  /** Second factor required for this person even when the realm makes it optional (e.g. staff but not customers). */
+  mfaRequired?: boolean;
+  /** Until then, a person who must enroll may still skip the enrollment at sign-in. */
+  mfaGraceUntil?: string | null;
   createdAt: string; updatedAt: string;
 }
 export interface IdentityRecord { realm: string; userId: string; provider: string; subject: string; email: string | null; createdAt: string }

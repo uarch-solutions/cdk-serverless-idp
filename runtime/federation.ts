@@ -4,12 +4,12 @@ import { randomToken } from './crypto.js';
 export type SocialProvider = 'google' | 'facebook';
 export const SOCIAL_PROVIDERS: SocialProvider[] = ['google', 'facebook'];
 export interface ExternalProfile { subject: string; email: string | null; emailVerified: boolean; name: string | null }
-export interface UpstreamState { uid: string; provider: SocialProvider; verifier: string; nonce: string }
+export interface UpstreamState { uid: string; realm: string; provider: SocialProvider; verifier: string; nonce: string }
 
 const GRAPH = 'https://graph.facebook.com/v19.0';
 
-export function newUpstreamState(uid: string, provider: SocialProvider): { state: string; data: UpstreamState } {
-  return { state: randomToken(24), data: { uid, provider, verifier: randomToken(48), nonce: randomToken(24) } };
+export function newUpstreamState(uid: string, realm: string, provider: SocialProvider): { state: string; data: UpstreamState } {
+  return { state: randomToken(24), data: { uid, realm, provider, verifier: randomToken(48), nonce: randomToken(24) } };
 }
 
 export function authorizationUrl(provider: SocialProvider, o: { clientId: string; redirectUri: string; state: string; data: UpstreamState }) {

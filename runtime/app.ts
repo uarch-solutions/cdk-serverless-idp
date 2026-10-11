@@ -164,10 +164,14 @@ export function createApp(deps: Deps) {
       await store.putStep(`mfa#${details.uid}`, { userId: user.id, method }, 600);
       return render(ctx, realm, t.mfaTitle, v.mfaForm(t, { action: `${base(realm)}/interaction/${details.uid}/mfa`, csrf: csrf(ctx) }));
     }
-    if (realm.mfa === 'required') {
+    if (realm.mfa === 'required' || user.mfaRequired) {
       const secret = newTotpSecret();
-      await store.putStep(`mfa#${details.uid}`, { userId: user.id, method, enrollSecret: secret }, 900);
-      return render(ctx, realm, t.enrollTitle, v.enrollForm(t, { action: `${base(realm)}/interaction/${details.uid}/mfa`, csrf: csrf(ctx), secret, uri: otpauthUri(secret, user.email, realm.displayName) }));
+      const graceUntil = user.mfaGraceUntil && new Date(user.mfaGraceUntil) > deps.now() ? user.mfaGraceUntil : null;
+      await store.putStep(`mfa#${details.uid}`, { userId: user.id, method, enrollSecret: secret, graceUntil }, 900);
+      return render(ctx, realm, t.enrollTitle, v.enrollForm(t, {
+        action: `${base(realm)}/interaction/${details.uid}/mfa`, csrf: csrf(ctx), secret, uri: otpauthUri(secret, user.email, realm.displayName),
+        ...(graceUntil ? { skip: { action: `${base(realm)}/interaction/${details.uid}/mfa-skip`, until: graceUntil } } : {}),
+      }));
     }
     return finishLogin(ctx, realm, provider, details, user, method, false);
   }
@@ -292,9 +296,28 @@ export function createApp(deps: Deps) {
     await finishLogin(ctx, realm, provider, details, user, step.method, true);
   });
 
+  router.post('/realms/:realm/interaction/:uid/mfa-skip', parse, async (ctx) => {
+    const realm = await realmOf(ctx.params.realm);
+    const provider = providerFor(realm);
+    checkCsrf(ctx);
+    const details = await interaction(ctx, provider);
+    if (!details || details.uid !== ctx.params.uid) throw new HttpError(400, 'invalid interaction');
+    const step = await store.step<{ userId: string; method: 'password' | 'google' | 'facebook'; enrollSecret?: string; graceUntil?: string | null }>(`mfa#${details.uid}`);
+    const user = step ? await store.user(realm.id, step.userId) : null;
+    // Skipping is only possible during the grace period of a person-level requirement.
+    if (!step?.enrollSecret || !step.graceUntil || new Date(step.graceUntil) <= deps.now() || !user || user.status !== 'ACTIVE' || realm.mfa === 'required') {
+      throw new HttpError(400, 'cannot skip');
+    }
+    await store.deleteStep(`mfa#${details.uid}`);
+    await store.audit(realm.id, 'MFA_ENROLLMENT_POSTPONED', { userId: user.id, until: step.graceUntil, ip: ctx.ip }, settings.auditRetentionDays);
+    await finishLogin(ctx, realm, provider, details, user, step.method, false);
+  });
+
   // ---- social login (upstream OIDC/OAuth2)
 
-  const callbackUrl = (realm: Realm, p: SocialProvider) => `${settings.issuerBase}${base(realm)}/federated/callback/${p}`;
+  // One callback URL for every realm (Google and Facebook require each redirect URI to be registered): the realm
+  // travels in the server-side state.
+  const callbackUrl = (p: SocialProvider) => `${settings.issuerBase}/federated/callback/${p}`;
 
   router.get('/realms/:realm/interaction/:uid/federated/:provider', async (ctx) => {
     const realm = await realmOf(ctx.params.realm);
@@ -304,22 +327,23 @@ export function createApp(deps: Deps) {
     if (!SOCIAL_PROVIDERS.includes(p) || !conf?.enabled) throw new HttpError(404, 'provider not enabled');
     const details = await interaction(ctx, provider);
     if (!details || details.uid !== ctx.params.uid) throw new HttpError(400, 'invalid interaction');
-    const { state, data } = newUpstreamState(details.uid, p);
+    const { state, data } = newUpstreamState(details.uid, realm.id, p);
     await store.putStep(`fed#${state}`, data, 600);
-    ctx.redirect(authorizationUrl(p, { clientId: conf.clientId, redirectUri: callbackUrl(realm, p), state, data }));
+    ctx.redirect(authorizationUrl(p, { clientId: conf.clientId, redirectUri: callbackUrl(p), state, data }));
   });
 
-  router.get('/realms/:realm/federated/callback/:provider', async (ctx) => {
-    const realm = await realmOf(ctx.params.realm);
-    const t = v.strings(realm.locale);
+  router.get('/federated/callback/:provider', async (ctx) => {
     const p = ctx.params.provider as SocialProvider;
-    const conf = realm.social[p];
     const state = String(ctx.query.state ?? '');
-    const data = state ? await store.step<UpstreamState>(`fed#${state}`) : null;
-    if (!conf?.enabled || !data || data.provider !== p) return render(ctx, realm, t.errorTitle, v.message({ title: t.errorTitle, text: t.linkExpired, error: true }), 400);
+    const data = state && /^[\w-]{20,64}$/.test(state) ? await store.step<UpstreamState>(`fed#${state}`) : null;
+    if (!data || data.provider !== p) return render(ctx, null, v.strings('pt-BR').errorTitle, v.message({ title: v.strings('pt-BR').errorTitle, text: v.strings('pt-BR').linkExpired, error: true }), 400);
+    const realm = await realmOf(data.realm);
+    const t = v.strings(realm.locale);
+    const conf = realm.social[p];
+    if (!conf?.enabled) return render(ctx, realm, t.errorTitle, v.message({ title: t.errorTitle, text: t.linkExpired, error: true }), 400);
     await store.deleteStep(`fed#${state}`);
     if (ctx.query.error || !ctx.query.code) return ctx.redirect(`${base(realm)}/interaction/${data.uid}`);
-    const profile = await exchange(deps.fetch, p, { code: String(ctx.query.code), clientId: conf.clientId, clientSecret: deps.cipher.decrypt(conf.clientSecretEnc), redirectUri: callbackUrl(realm, p), data });
+    const profile = await exchange(deps.fetch, p, { code: String(ctx.query.code), clientId: conf.clientId, clientSecret: deps.cipher.decrypt(conf.clientSecretEnc), redirectUri: callbackUrl(p), data });
     let identity = await store.identity(realm.id, p, profile.subject);
     if (!identity && realm.socialAutoLink && profile.email && profile.emailVerified) {
       const byEmail = await store.userByEmail(realm.id, profile.email);
@@ -508,7 +532,7 @@ export function createApp(deps: Deps) {
     const t = v.strings(realm.locale);
     const user = await reauth(ctx, realm);
     if (typeof user === 'string') return accountView(ctx, realm, { error: user }, 401);
-    if (realm.mfa === 'required') return accountView(ctx, realm, { error: t.mfaRequiredByRealm, email: user.email }, 409);
+    if (realm.mfa === 'required' || user.mfaRequired) return accountView(ctx, realm, { error: t.mfaRequiredByRealm, email: user.email }, 409);
     const problem = await secondFactorCheck(ctx, realm, user);
     if (problem) return accountView(ctx, realm, { error: problem, email: user.email }, 401);
     await store.putUser({ ...user, mfa: null, recoveryHashes: [], updatedAt: deps.now().toISOString() });

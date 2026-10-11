@@ -17,7 +17,7 @@ export type AdminEvent =
   | { action: 'putClient'; client: Partial<Omit<ClientRecord, 'secretEnc' | 'hook'>> & { clientId: string; confidential?: boolean; hook?: (Omit<Hook, 'secretEnc'> & { secret?: string }) | null } }
   | { action: 'rotateClientSecret'; clientId: string }
   | { action: 'getClient'; clientId: string }
-  | { action: 'upsertUser'; realm: string; user: { id?: string; email: string; name: string; status?: UserRecord['status']; emailVerified?: boolean; passwordHash?: string } }
+  | { action: 'upsertUser'; realm: string; user: { id?: string; email: string; name: string; status?: UserRecord['status']; emailVerified?: boolean; passwordHash?: string; mfaRequired?: boolean; mfaGraceUntil?: string | null } }
   | { action: 'addRedirectUris'; clientId: string; redirectUris?: string[]; postLogoutRedirectUris?: string[] }
   | { action: 'importUsers'; realm: string; users: ImportUser[] }
   | { action: 'getUser'; realm: string; id?: string; email?: string }
@@ -35,6 +35,7 @@ export interface ImportUser {
   mfaSecret?: string | null; mfaEnabledAt?: string | null; mfaLastStep?: number | null;
   /** sha256 of the lowercase recovery codes. */
   recoveryHashes?: string[];
+  mfaRequired?: boolean; mfaGraceUntil?: string | null;
   identities?: { provider: string; subject: string; email: string | null }[];
 }
 
@@ -190,7 +191,10 @@ async function run(event: AdminEvent, deps: Parameters<typeof admin>[1]): Promis
         id: current?.id ?? event.user.id ?? randomUUID(), realm: event.realm, email, name: event.user.name,
         passwordHash: event.user.passwordHash ?? current?.passwordHash ?? null, status: event.user.status ?? current?.status ?? 'ACTIVE',
         emailVerified: current && current.email === email ? current.emailVerified || !!event.user.emailVerified : !!event.user.emailVerified,
-        mfa: current?.mfa ?? null, recoveryHashes: current?.recoveryHashes ?? [], createdAt: current?.createdAt ?? nowIso(), updatedAt: nowIso(),
+        mfa: current?.mfa ?? null, recoveryHashes: current?.recoveryHashes ?? [],
+        mfaRequired: event.user.mfaRequired ?? current?.mfaRequired ?? false,
+        mfaGraceUntil: event.user.mfaGraceUntil !== undefined ? event.user.mfaGraceUntil : current?.mfaGraceUntil ?? null,
+        createdAt: current?.createdAt ?? nowIso(), updatedAt: nowIso(),
       };
       await store.putUser(user);
       const passwordChanged = !!event.user.passwordHash && current?.passwordHash !== event.user.passwordHash;
@@ -209,7 +213,8 @@ async function run(event: AdminEvent, deps: Parameters<typeof admin>[1]): Promis
         await store.putUser({
           id: u.id, realm: event.realm, email, name: u.name, passwordHash: u.passwordHash, status: u.status, emailVerified: u.emailVerified,
           mfa: u.mfaSecret ? { secretEnc: cipher.encrypt(u.mfaSecret), enabledAt: u.mfaEnabledAt ?? null, lastStep: u.mfaLastStep ?? null } : null,
-          recoveryHashes: u.recoveryHashes ?? [], createdAt: current?.createdAt ?? nowIso(), updatedAt: nowIso(),
+          recoveryHashes: u.recoveryHashes ?? [], mfaRequired: u.mfaRequired ?? false, mfaGraceUntil: u.mfaGraceUntil ?? null,
+          createdAt: current?.createdAt ?? nowIso(), updatedAt: nowIso(),
         });
         for (const i of u.identities ?? []) {
           const identity: IdentityRecord = { realm: event.realm, userId: u.id, provider: i.provider.toLowerCase(), subject: i.subject, email: i.email, createdAt: nowIso() };
@@ -293,5 +298,6 @@ const publicRealm = (r: Realm) => ({ ...r, social: Object.fromEntries(Object.ent
 const publicClient = (c: ClientRecord) => ({ ...c, secretEnc: undefined, confidential: !!c.secretEnc, hook: c.hook ? { ...c.hook, secretEnc: undefined, hasSecret: !!c.hook.secretEnc } : null });
 const publicUser = (u: UserRecord) => ({
   id: u.id, realm: u.realm, email: u.email, name: u.name, status: u.status, emailVerified: u.emailVerified, mfaEnabled: !!u.mfa?.enabledAt,
+  mfaRequired: !!u.mfaRequired, mfaGraceUntil: u.mfaGraceUntil ?? null,
   hasPassword: !!u.passwordHash, createdAt: u.createdAt, updatedAt: u.updatedAt,
 });

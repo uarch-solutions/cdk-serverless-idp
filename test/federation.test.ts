@@ -38,6 +38,7 @@ describe('social login (Google)', () => {
     const g = new URL(toGoogle.url);
     expect(g.origin).toBe('https://accounts.google.com');
     expect(g.searchParams.get('code_challenge_method')).toBe('S256');
+    expect(g.searchParams.get('redirect_uri')).toBe(`${idp.base}/federated/callback/google`); // one URL for every realm
     upstream.nonce = g.searchParams.get('nonce')!;
     const back = await b.follow(`${g.searchParams.get('redirect_uri')}?code=abc&state=${g.searchParams.get('state')}`, idp.base);
     expect(back.url.startsWith(CB)).toBe(true);

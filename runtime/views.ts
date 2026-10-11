@@ -29,6 +29,7 @@ const T = {
     errorTitle: 'Não foi possível continuar', logoutTitle: 'Sair', logoutHelp: 'Deseja sair da sua conta?', logout: 'Sair', loggedOut: 'Você saiu da sua conta.',
     scopes: { openid: 'Saber quem você é', email: 'Ver seu e-mail', profile: 'Ver seu nome', offline_access: 'Manter você conectado' } as Record<string, string>,
     deniedByApp: 'O aplicativo não liberou o seu acesso',
+    notNow: 'Agora não', graceUntil: 'Você pode adiar até',
   },
   en: {
     signIn: 'Sign in', email: 'Email', password: 'Password', forgot: 'Forgot password', or: 'or',
@@ -55,6 +56,7 @@ const T = {
     errorTitle: 'Something went wrong', logoutTitle: 'Sign out', logoutHelp: 'Do you want to sign out?', logout: 'Sign out', loggedOut: 'You are signed out.',
     scopes: { openid: 'Know who you are', email: 'See your email', profile: 'See your name', offline_access: 'Keep you signed in' } as Record<string, string>,
     deniedByApp: 'The application did not allow your access',
+    notNow: 'Not now', graceUntil: 'You can postpone until',
   },
 };
 export type Strings = (typeof T)['en'];
@@ -131,13 +133,14 @@ export function qrSvg(text: string) {
   return qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
 }
 
-export function enrollForm(t: Strings, o: { action: string; csrf: string; uri: string; secret: string; error?: string; help?: string }) {
+export function enrollForm(t: Strings, o: { action: string; csrf: string; uri: string; secret: string; error?: string; help?: string; skip?: { action: string; until: string } }) {
   return `<h1>${esc(t.enrollTitle)}</h1><p class="muted">${esc(o.help ?? t.enrollHelp)}</p>${errorLine(o.error)}
 <div class="qr" aria-hidden="true">${qrSvg(o.uri)}</div>
 <p class="muted">${esc(t.manualKey)}: <code>${esc(o.secret)}</code></p>
 <form method="post" action="${esc(o.action)}">${csrfField(o.csrf)}
 <label for="code">${esc(t.code)}</label><input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" required maxlength="6">
-<button type="submit">${esc(t.continue)}</button></form>`;
+<button type="submit">${esc(t.continue)}</button></form>
+${o.skip ? `<form method="post" action="${esc(o.skip.action)}">${csrfField(o.csrf)}<button type="submit" class="secondary">${esc(t.notNow)}</button></form><p class="muted">${esc(t.graceUntil)} ${esc(new Date(o.skip.until).toLocaleDateString(t === T['pt-BR'] ? 'pt-BR' : 'en'))}</p>` : ''}`;
 }
 
 export function recoveryCodes(t: Strings, o: { codes: string[]; action?: string; csrf?: string; link?: { href: string; label: string } }) {

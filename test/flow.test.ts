@@ -259,6 +259,28 @@ describe('OpenID Provider', () => {
     await idp.admin({ action: 'putRealm', realm: { id: 'acme', mfa: 'optional' } });
   });
 
+  it('second factor required for one person (not the realm): enrollment at sign-in, postponable during the grace period', async () => {
+    const until = new Date(Date.now() + 3 * 86400_000).toISOString();
+    const u = await idp.admin({ action: 'upsertUser', realm: 'acme', user: { email: 'prof@acme.test', name: 'Prof', mfaRequired: true, mfaGraceUntil: until } });
+    await idp.admin({ action: 'setPassword', realm: 'acme', id: u.user.id, password: 'Prof-12345' });
+    const b = new Browser();
+    const { challenge } = pkce();
+    let page = await b.follow(authorizeUrl('acme', challenge), idp.base);
+    page = await b.post(`${idp.base}${formAction(page.html)}`, { _csrf: field(page.html, '_csrf'), email: 'prof@acme.test', password: 'Prof-12345' }, idp.base);
+    expect(page.html).toContain('Agora não');
+    const skip = /<form method="post" action="([^"]+mfa-skip)"/.exec(page.html)![1]!;
+    page = await b.post(`${idp.base}${skip}`, { _csrf: b.jar.get('_csrf')! }, idp.base);
+    expect(page.url.startsWith(APP_CB)).toBe(true);
+    // Grace over: no skip.
+    await idp.admin({ action: 'upsertUser', realm: 'acme', user: { id: u.user.id, email: 'prof@acme.test', name: 'Prof', mfaGraceUntil: new Date(Date.now() - 1000).toISOString() } });
+    const b2 = new Browser();
+    page = await b2.follow(authorizeUrl('acme', pkce().challenge), idp.base);
+    page = await b2.post(`${idp.base}${formAction(page.html)}`, { _csrf: field(page.html, '_csrf'), email: 'prof@acme.test', password: 'Prof-12345' }, idp.base);
+    expect(page.html).toContain('Ative a verificação em duas etapas');
+    expect(page.html).not.toContain('Agora não');
+    expect((await b2.fetch(`${idp.base}${skip.replace(/interaction\/[^/]+/, 'interaction/x')}`, { method: 'POST' })).status).toBeGreaterThanOrEqual(400);
+  });
+
   it('disabling a person ends the open sessions; audit trail records the events', async () => {
     const t = await (async () => {
       const { page, verifier } = await signIn(new Browser(), 'acme', 'ana@acme.test', 'Nova-Senha-456');
