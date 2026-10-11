@@ -9,7 +9,8 @@ import {
  * | item            | pk                          | sk                              | gsi1pk                         | gsi3pk              |
  * |-----------------|-----------------------------|---------------------------------|--------------------------------|---------------------|
  * | realm           | REALM#<realm>               | META                            |                                |                     |
- * | user            | REALM#<realm>               | USER#<id>                       | EMAIL#<realm>#<email>          |                     |
+ * | user            | REALM#<realm>               | USER#<id>                       |                                |                     |
+ * | e-mail pointer  | EMAIL#<realm>#<email>       | META (userId; unique per realm) |                                |                     |
  * | social identity | REALM#<realm>               | IDP#<provider>#<subject>        | USERIDP#<realm>#<userId>       |                     |
  * | audit event     | REALM#<realm>               | AUDIT#<iso>#<rand>              |                                |                     |
  * | client (app)    | CLIENT#<clientId>           | META                            |                                |                     |
@@ -18,7 +19,8 @@ import {
  * | pending step    | STEP#<key>                  | META                            |                                |                     |
  * | OIDC model      | OIDC#<Model>#<id>           | META                            | GRANT#<grantId>                | ACCOUNT#<realm>#<sub>|
  *
- * `gsi2pk` holds `UID#<uid>` (sessions) and `USERCODE#<code>` (device flow).
+ * Strongly consistent pointers `OIDCREF#UID#<uid>` / `OIDCREF#USERCODE#<code>` find sessions and device codes (an
+ * index would be eventually consistent, and a session is read right after it is written).
  */
 export type MfaPolicy = 'off' | 'optional' | 'required';
 export interface Realm {
@@ -74,6 +76,11 @@ export class Store {
     await this.doc.send(new PutCommand({ TableName: this.table, Item: item }));
   }
 
+  // ---- installation (issuer base learned from CloudFront when there is no custom domain)
+
+  installation() { return this.get<{ issuerBase: string }>('INSTALL'); }
+  async putInstallation(issuerBase: string) { await this.put({ pk: 'INSTALL', sk: 'META', data: { issuerBase } }); }
+
   // ---- realms
 
   realm(id: string) { return this.get<Realm>(`REALM#${id}`); }
@@ -88,20 +95,33 @@ export class Store {
 
   user(realm: string, id: string) { return this.get<UserRecord>(`REALM#${realm}`, `USER#${id}`); }
 
+  /** Strongly consistent (pointer item): right after a person is created or imported they can sign in. */
   async userByEmail(realm: string, email: string): Promise<UserRecord | null> {
-    const r = await this.doc.send(new QueryCommand({
-      TableName: this.table, IndexName: 'gsi1', KeyConditionExpression: 'gsi1pk = :k', ExpressionAttributeValues: { ':k': emailKey(realm, email) }, Limit: 1,
-    }));
-    return (r.Items?.[0]?.data as UserRecord | undefined) ?? null;
+    const r = await this.doc.send(new GetCommand({ TableName: this.table, Key: { pk: emailKey(realm, email), sk: 'META' }, ConsistentRead: true }));
+    const id = r.Item?.userId as string | undefined;
+    return id ? this.user(realm, id) : null;
   }
 
   async putUser(u: UserRecord) {
     u.email = u.email.trim().toLowerCase();
-    await this.put({ pk: `REALM#${u.realm}`, sk: `USER#${u.id}`, gsi1pk: emailKey(u.realm, u.email), gsi1sk: 'USER', data: u });
+    const before = await this.user(u.realm, u.id);
+    await this.put({ pk: `REALM#${u.realm}`, sk: `USER#${u.id}`, data: u });
+    if (before && before.email !== u.email) {
+      await this.doc.send(new DeleteCommand({ TableName: this.table, Key: { pk: emailKey(u.realm, before.email), sk: 'META' }, ConditionExpression: 'userId = :id', ExpressionAttributeValues: { ':id': u.id } })).catch(() => undefined);
+    }
+    if (!before || before.email !== u.email) {
+      // One person per e-mail in a realm, even with concurrent writes.
+      await this.doc.send(new PutCommand({
+        TableName: this.table, Item: { pk: emailKey(u.realm, u.email), sk: 'META', userId: u.id },
+        ConditionExpression: 'attribute_not_exists(pk) OR userId = :id', ExpressionAttributeValues: { ':id': u.id },
+      }));
+    }
   }
 
   async deleteUser(realm: string, id: string) {
+    const u = await this.user(realm, id);
     await this.doc.send(new DeleteCommand({ TableName: this.table, Key: { pk: `REALM#${realm}`, sk: `USER#${id}` } }));
+    if (u) await this.doc.send(new DeleteCommand({ TableName: this.table, Key: { pk: emailKey(realm, u.email), sk: 'META' } }));
   }
 
   // ---- social identities
@@ -202,19 +222,24 @@ export class Store {
   }
 
   async oidcPut(model: string, id: string, payload: Record<string, unknown>, expiresIn: number | undefined, index: { grantId?: string; uid?: string; userCode?: string; account?: string }) {
+    const ttl = expiresIn ? { ttl: ttlIn(expiresIn) } : {};
     await this.put({
-      pk: `OIDC#${model}#${id}`, sk: 'META', data: payload, ...(expiresIn ? { ttl: ttlIn(expiresIn) } : {}),
+      pk: `OIDC#${model}#${id}`, sk: 'META', data: payload, ...ttl,
       ...(index.grantId ? { gsi1pk: `GRANT#${index.grantId}`, gsi1sk: `OIDC#${model}#${id}` } : {}),
-      ...(index.uid ? { gsi2pk: `UID#${index.uid}` } : index.userCode ? { gsi2pk: `USERCODE#${index.userCode}` } : {}),
       ...(index.account ? { gsi3pk: `ACCOUNT#${index.account}`, gsi3sk: `OIDC#${model}#${id}` } : {}),
     });
+    // Lookups by uid/user code must be strongly consistent (a session is read right after it is written), so they
+    // use pointer items instead of an eventually consistent index.
+    if (index.uid) await this.put({ pk: `OIDCREF#UID#${index.uid}`, sk: 'META', ref: `${model}#${id}`, ...ttl });
+    if (index.userCode) await this.put({ pk: `OIDCREF#USERCODE#${index.userCode}`, sk: 'META', ref: `${model}#${id}`, ...ttl });
   }
 
-  async oidcByIndex(index: 'gsi2', key: string) {
-    const r = await this.doc.send(new QueryCommand({ TableName: this.table, IndexName: index, KeyConditionExpression: 'gsi2pk = :k', ExpressionAttributeValues: { ':k': key }, Limit: 1 }));
-    const item = r.Items?.[0] as { data?: Record<string, unknown>; ttl?: number } | undefined;
-    if (!item || (item.ttl && item.ttl < Date.now() / 1000)) return undefined;
-    return item.data;
+  async oidcByRef(kind: 'UID' | 'USERCODE', key: string) {
+    const r = await this.doc.send(new GetCommand({ TableName: this.table, Key: { pk: `OIDCREF#${kind}#${key}`, sk: 'META' }, ConsistentRead: true }));
+    const ref = r.Item?.ref as string | undefined;
+    if (!ref || (r.Item?.ttl && r.Item.ttl < Date.now() / 1000)) return undefined;
+    const [model, ...rest] = ref.split('#');
+    return this.oidcGet(model!, rest.join('#'));
   }
 
   async oidcConsume(model: string, id: string) {
@@ -225,7 +250,11 @@ export class Store {
   }
 
   async oidcDelete(model: string, id: string) {
+    const current = await this.oidcGet(model, id);
     await this.doc.send(new DeleteCommand({ TableName: this.table, Key: { pk: `OIDC#${model}#${id}`, sk: 'META' } }));
+    for (const [kind, key] of [['UID', current?.uid], ['USERCODE', current?.userCode]] as const) {
+      if (typeof key === 'string') await this.doc.send(new DeleteCommand({ TableName: this.table, Key: { pk: `OIDCREF#${kind}#${key}`, sk: 'META' } }));
+    }
   }
 
   /** Deletes every item of an index partition (tokens of a grant, sessions and grants of an account). */

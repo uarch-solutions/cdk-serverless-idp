@@ -87,6 +87,13 @@ export function createApp(deps: Deps) {
   // ---- security headers and origin check
 
   app.use(async (ctx, next) => {
+    // No custom domain: the issuer is the distribution's own *.cloudfront.net name (set by the CloudFront function).
+    if (!settings.issuerBase) {
+      const host = ctx.get('x-forwarded-host');
+      if (!/^[a-z0-9]+\.cloudfront\.net$/.test(host)) { ctx.status = 400; ctx.body = 'issuer not configured'; return; }
+      settings.issuerBase = `https://${host}`;
+      await store.putInstallation(settings.issuerBase); // the admin API builds invite links with it
+    }
     const origin = deps.secret.originVerify;
     if (origin && ctx.path !== '/healthz' && ctx.get('x-origin-verify') !== origin) {
       ctx.status = 403;
@@ -117,7 +124,8 @@ export function createApp(deps: Deps) {
   async function interaction(ctx: Ctx, provider: Provider) {
     try {
       return await provider.interactionDetails(ctx.req, ctx.res);
-    } catch {
+    } catch (e) {
+      console.warn(JSON.stringify({ interactionNotFound: (e as Error).message, detail: (e as { error_description?: string }).error_description, path: ctx.path, cookies: (ctx.get('cookie') || '').split(';').map((c) => c.split('=')[0]!.trim()) }));
       return null;
     }
   }

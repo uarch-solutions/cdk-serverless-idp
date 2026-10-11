@@ -55,7 +55,12 @@ const sm = () => new SecretsManagerClient({});
 export async function readSecret(secretId: string, maxAgeMs = 300_000): Promise<RuntimeSecret | null> {
   if (cached && Date.now() - cached.at < maxAgeMs) return cached.value;
   const r = await sm().send(new GetSecretValueCommand({ SecretId: secretId }));
-  const value = JSON.parse(r.SecretString ?? '{}') as Partial<RuntimeSecret>;
+  let value: Partial<RuntimeSecret>;
+  try {
+    value = JSON.parse(r.SecretString ?? '{}') as Partial<RuntimeSecret>;
+  } catch {
+    return null; // placeholder created by CloudFormation: not bootstrapped yet
+  }
   if (!value.jwks?.keys?.length || !value.cookieKeys?.length || !value.dataKey) return null;
   cached = { at: Date.now(), value: value as RuntimeSecret };
   return cached.value;
@@ -71,6 +76,8 @@ export async function depsFromEnv(): Promise<Deps> {
   const secret = await readSecret(settings.secretId);
   if (!secret) throw new Error('installation secret not bootstrapped yet (run the admin "bootstrap" action)');
   const cipher = new Cipher(Buffer.from(secret.dataKey, 'base64'));
+  // The CloudFront origin header comes from the deployment (dynamic reference), not from the runtime secret.
+  if (process.env.ORIGIN_VERIFY) secret.originVerify = process.env.ORIGIN_VERIFY;
   return {
     settings, secret, cipher,
     store: new Store(settings.tableName),

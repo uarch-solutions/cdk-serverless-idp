@@ -91,6 +91,11 @@ async function run(event: AdminEvent, deps: Parameters<typeof admin>[1]): Promis
   }
   const cipher = deps.cipher;
   if (!cipher) throw new AdminError('NOT_BOOTSTRAPPED', 'run bootstrap first');
+  if (!settings.issuerBase) {
+    // No custom domain: the public function learns its CloudFront name on the first request.
+    settings.issuerBase = (await store.installation())?.issuerBase ?? '';
+    if (!settings.issuerBase && event.action === 'invite') throw new AdminError('NOT_READY', 'open the provider URL once so it learns its address');
+  }
 
   switch (event.action) {
     case 'putRealm': {

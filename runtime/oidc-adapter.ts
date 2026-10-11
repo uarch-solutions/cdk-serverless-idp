@@ -43,8 +43,8 @@ export function adapterFactory(store: Store, cipher: Cipher, realm: string) {
       return store.oidcGet(this.model, id);
     }
 
-    findByUid(uid: string) { return store.oidcByIndex('gsi2', `UID#${uid}`); }
-    findByUserCode(userCode: string) { return store.oidcByIndex('gsi2', `USERCODE#${userCode}`); }
+    findByUid(uid: string) { return store.oidcByRef('UID', uid); }
+    findByUserCode(userCode: string) { return store.oidcByRef('USERCODE', userCode); }
     destroy(id: string) { return store.oidcDelete(this.model, id); }
     consume(id: string) { return store.oidcConsume(this.model, id); }
     revokeByGrantId(grantId: string) { return store.deleteByIndex('gsi1', `GRANT#${grantId}`); }

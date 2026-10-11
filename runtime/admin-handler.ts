@@ -1,19 +1,9 @@
-import serverless from 'serverless-http';
 import { admin, type AdminEvent } from './admin.js';
 import { Cipher } from './crypto.js';
-import { depsFromEnv, readSecret, settingsFromEnv, writeSecret } from './deps.js';
+import { readSecret, settingsFromEnv, writeSecret } from './deps.js';
 import { HookCaller } from './hooks.js';
 import { SesMailer } from './mail.js';
-import { createApp } from './app.js';
 import { Store } from './store.js';
-
-let web: ReturnType<typeof serverless> | undefined;
-
-/** Public Lambda (Function URL behind CloudFront): hosted pages and the OpenID Provider of every realm. */
-export const webHandler = async (event: unknown, context: unknown) => {
-  web ??= serverless(createApp(await depsFromEnv()));
-  return web(event as never, context as never);
-};
 
 /** Admin Lambda (IAM only). With no `action` (deployment trigger) it bootstraps the installation secret. */
 export const adminHandler = async (event: Partial<AdminEvent> | undefined) => {

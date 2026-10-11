@@ -23,7 +23,7 @@ export function startDynamo() {
 
 export const dynamoClient = () => new DynamoDBClient({ endpoint: `http://localhost:${DYNAMO_PORT}`, region: 'us-east-1', credentials: { accessKeyId: 'x', secretAccessKey: 'x' } });
 
-/** Same schema as the construct: pk/sk, three GSIs and TTL. */
+/** Same schema as the construct: pk/sk, two GSIs and TTL. */
 export async function createTable(client: DynamoDBClient, name: string) {
   for (let i = 0; i < 40; i++) {
     try {
@@ -31,11 +31,10 @@ export async function createTable(client: DynamoDBClient, name: string) {
       const s = { AttributeType: 'S' as const };
       await client.send(new CreateTableCommand({
         TableName: name, BillingMode: 'PAY_PER_REQUEST',
-        AttributeDefinitions: ['pk', 'sk', 'gsi1pk', 'gsi1sk', 'gsi2pk', 'gsi3pk', 'gsi3sk'].map((AttributeName) => ({ AttributeName, ...s })),
+        AttributeDefinitions: ['pk', 'sk', 'gsi1pk', 'gsi1sk', 'gsi3pk', 'gsi3sk'].map((AttributeName) => ({ AttributeName, ...s })),
         KeySchema: [{ AttributeName: 'pk', KeyType: 'HASH' }, { AttributeName: 'sk', KeyType: 'RANGE' }],
         GlobalSecondaryIndexes: [
           { IndexName: 'gsi1', KeySchema: [{ AttributeName: 'gsi1pk', KeyType: 'HASH' }, { AttributeName: 'gsi1sk', KeyType: 'RANGE' }], Projection: { ProjectionType: 'ALL' } },
-          { IndexName: 'gsi2', KeySchema: [{ AttributeName: 'gsi2pk', KeyType: 'HASH' }], Projection: { ProjectionType: 'ALL' } },
           { IndexName: 'gsi3', KeySchema: [{ AttributeName: 'gsi3pk', KeyType: 'HASH' }, { AttributeName: 'gsi3sk', KeyType: 'RANGE' }], Projection: { ProjectionType: 'KEYS_ONLY' } },
         ],
       }));
@@ -74,26 +73,31 @@ export async function startIdp(table: string): Promise<Harness> {
   };
 }
 
-/** Minimal browser: cookie jar and manual redirects. */
+/** Minimal browser: cookie jar (name + path, like a real browser) and manual redirects. */
 export class Browser {
-  jar = new Map<string, string>();
+  cookies = new Map<string, { name: string; value: string; path: string }>();
+  get jar() { return new Map([...this.cookies.values()].map((c) => [c.name, c.value])); }
 
-  private remember(res: Response) {
+  private remember(res: Response, url: string) {
     for (const c of res.headers.getSetCookie()) {
-      const [pair] = c.split(';');
+      const [pair, ...attrs] = c.split(';');
       const i = pair!.indexOf('=');
       const name = pair!.slice(0, i).trim();
       const value = pair!.slice(i + 1).trim();
-      if (!value || /expires=Thu, 01 Jan 1970/i.test(c)) this.jar.delete(name);
-      else this.jar.set(name, value);
+      const path = attrs.map((a) => a.trim()).find((a) => /^path=/i.test(a))?.slice(5) || new URL(url).pathname.replace(/\/[^/]*$/, '') || '/';
+      const key = `${name}|${path}`;
+      if (!value || /expires=Thu, 01 Jan 1970/i.test(c)) this.cookies.delete(key);
+      else this.cookies.set(key, { name, value, path });
     }
   }
 
   async fetch(url: string, init: RequestInit = {}) {
     const headers = new Headers(init.headers);
-    if (this.jar.size) headers.set('cookie', [...this.jar].map(([k, v]) => `${k}=${v}`).join('; '));
+    const pathname = new URL(url).pathname;
+    const sending = [...this.cookies.values()].filter((c) => pathname === c.path || pathname.startsWith(c.path.endsWith('/') ? c.path : `${c.path}/`) || c.path === '/');
+    if (sending.length) headers.set('cookie', sending.map((c) => `${c.name}=${c.value}`).join('; '));
     const res = await fetch(url, { ...init, headers, redirect: 'manual' });
-    this.remember(res);
+    this.remember(res, url);
     return res;
   }
 
