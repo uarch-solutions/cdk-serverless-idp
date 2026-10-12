@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { createLocalJWKSet, decodeJwt, jwtVerify } from 'jose';
+import { ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { base32Decode, hookSignature, hotp, totpStep } from '../runtime/crypto.js';
 import { Browser, field, formAction, startDynamo, startIdp, type Harness } from './support/harness.js';
@@ -324,6 +325,32 @@ describe('OpenID Provider', () => {
     expect((await (await token('acme', { grant_type: 'refresh_token', refresh_token: t.refresh_token })).json()).error).toBe('invalid_grant');
     const events = (await idp.admin({ action: 'audit', realm: 'acme' })).events.map((e: { event: string }) => e.event);
     expect(events).toEqual(expect.arrayContaining(['LOGIN', 'LOGIN_FAILED', 'MFA_RECOVERY_CODE_USED', 'PASSWORD_RESET', 'USER_UPDATED', 'LOGIN_DENIED_BY_APP']));
+  });
+
+  it('a customer that leaves: its realm goes with everything in it, and its addresses leave the shared application', async () => {
+    await idp.admin({ action: 'putRealm', realm: { id: 'leaving', displayName: 'Leaving' } });
+    await idp.admin({ action: 'putClient', client: { clientId: 'app', realms: ['acme', 'leaving'] } });
+    const u = await idp.admin({ action: 'upsertUser', realm: 'leaving', user: { email: 'bye@leaving.test', name: 'Bye' } });
+    await idp.admin({ action: 'setPassword', realm: 'leaving', id: u.user.id, password: 'Leaving-123' });
+    const { page } = await signIn(new Browser(), 'leaving', 'bye@leaving.test', 'Leaving-123');
+    expect(page.url.startsWith(APP_CB)).toBe(true); // a session and a grant exist now
+    expect((await idp.admin({ action: 'listRealms' })).realms).toEqual(expect.arrayContaining(['acme', 'leaving']));
+
+    const r = await idp.admin({ action: 'deleteRealm', realm: 'leaving' });
+    expect(r).toMatchObject({ ok: true, deleted: true, people: 1 });
+    expect((await fetch(`${idp.base}/realms/leaving/.well-known/openid-configuration`)).status).toBe(404);
+    expect(await idp.store.userByEmail('leaving', 'bye@leaving.test')).toBeNull();
+    const left = await idp.store.doc.send(new ScanCommand({ TableName: idp.store.table, FilterExpression: 'contains(pk, :r) OR contains(gsi3pk, :r)', ExpressionAttributeValues: { ':r': 'leaving' } }));
+    expect(left.Items).toEqual([]);
+    expect((await idp.admin({ action: 'listRealms' })).realms).not.toContain('leaving');
+    expect((await idp.admin({ action: 'deleteRealm', realm: 'leaving' })).error).toBe('REALM_NOT_FOUND');
+
+    await idp.admin({ action: 'addRedirectUris', clientId: 'app', redirectUris: ['https://leaving.example/cb'], postLogoutRedirectUris: ['https://leaving.example/bye'] });
+    await idp.admin({ action: 'removeRedirectUris', clientId: 'app', redirectUris: ['https://leaving.example/cb'], postLogoutRedirectUris: ['https://leaving.example/bye'] });
+    const c = (await idp.admin({ action: 'getClient', clientId: 'app' })).client;
+    expect(c.redirectUris).toContain(APP_CB);
+    expect(c.redirectUris).not.toContain('https://leaving.example/cb');
+    expect(c.postLogoutRedirectUris).not.toContain('https://leaving.example/bye');
   });
 
   it('security headers: strict CSP without scripts, no framing', async () => {

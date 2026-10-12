@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.0
+
+- Admin: `deleteRealm` removes a realm with everything in it (people and their e-mail pointers, sessions and grants,
+  social identities, audit trail); `removeRedirectUris` takes a customer's addresses out of a shared application;
+  `listRealms` lists the realm ids for housekeeping.
+
 ## 0.4.0
 
 - Checked against the OpenID Foundation conformance suite (Basic OP and Config OP plans) in CI; `conformance/run.sh`

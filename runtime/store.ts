@@ -1,6 +1,6 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import {
-  BatchWriteCommand, DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, UpdateCommand,
+  BatchWriteCommand, DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, ScanCommand, UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 
 /**
@@ -304,6 +304,54 @@ export class Store {
     for (const [kind, key] of [['UID', current?.uid], ['USERCODE', current?.userCode]] as const) {
       if (typeof key === 'string') await this.doc.send(new DeleteCommand({ TableName: this.table, Key: { pk: `OIDCREF#${kind}#${key}`, sk: 'META' } }));
     }
+  }
+
+  /**
+   * Deletes a realm with everything in it: the realm, its people (and their e-mail pointers, sessions and grants), social
+   * identities and audit trail. Tokens left behind expire by TTL and no longer resolve (their realm and grant are gone).
+   */
+  async deleteRealm(realm: string): Promise<{ items: number; people: number }> {
+    let items = 0;
+    let people = 0;
+    let start: Record<string, unknown> | undefined;
+    do {
+      const r = await this.doc.send(new QueryCommand({
+        TableName: this.table, KeyConditionExpression: 'pk = :p', ExpressionAttributeValues: { ':p': `REALM#${realm}` },
+        ProjectionExpression: 'pk, sk, #d.email', ExpressionAttributeNames: { '#d': 'data' }, ExclusiveStartKey: start,
+      }));
+      const keys: { pk: string; sk: string }[] = [];
+      for (const i of r.Items ?? []) {
+        keys.push({ pk: i.pk, sk: i.sk });
+        if (String(i.sk).startsWith('USER#')) {
+          people++;
+          const id = String(i.sk).slice(5);
+          if (i.data?.email) keys.push({ pk: emailKey(realm, i.data.email), sk: 'META' });
+          await this.deleteByIndex('gsi3', `ACCOUNT#${realm}#${id}`);
+        }
+      }
+      for (let k = 0; k < keys.length; k += 25) {
+        await this.doc.send(new BatchWriteCommand({ RequestItems: { [this.table]: keys.slice(k, k + 25).map((Key) => ({ DeleteRequest: { Key } })) } }));
+      }
+      items += keys.length;
+      start = r.LastEvaluatedKey;
+    } while (start);
+    await this.bumpConfig();
+    return { items, people };
+  }
+
+  /** Realm ids (admin only: a scan of the realm records, for housekeeping). */
+  async realmIds(): Promise<string[]> {
+    const out: string[] = [];
+    let start: Record<string, unknown> | undefined;
+    do {
+      const r = await this.doc.send(new ScanCommand({
+        TableName: this.table, FilterExpression: 'sk = :m AND begins_with(pk, :p)', ExpressionAttributeValues: { ':m': 'META', ':p': 'REALM#' },
+        ProjectionExpression: 'pk', ExclusiveStartKey: start,
+      }));
+      out.push(...(r.Items ?? []).map((i) => String(i.pk).slice(6)));
+      start = r.LastEvaluatedKey;
+    } while (start);
+    return out.sort();
   }
 
   /** Deletes every item of an index partition (tokens of a grant, sessions and grants of an account). */

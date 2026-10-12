@@ -19,6 +19,9 @@ export type AdminEvent =
   | { action: 'getClient'; clientId: string }
   | { action: 'upsertUser'; realm: string; user: { id?: string; email: string; name: string; status?: UserRecord['status']; emailVerified?: boolean; passwordHash?: string; passwordChangeRequired?: boolean; mfaRequired?: boolean; mfaGraceUntil?: string | null } }
   | { action: 'addRedirectUris'; clientId: string; redirectUris?: string[]; postLogoutRedirectUris?: string[] }
+  | { action: 'removeRedirectUris'; clientId: string; redirectUris?: string[]; postLogoutRedirectUris?: string[] }
+  | { action: 'deleteRealm'; realm: string }
+  | { action: 'listRealms' }
   | { action: 'importUsers'; realm: string; users: ImportUser[] }
   | { action: 'getUser'; realm: string; id?: string; email?: string }
   | { action: 'setPassword'; realm: string; id: string; password: string; temporary?: boolean }
@@ -174,6 +177,22 @@ async function run(event: AdminEvent, deps: Parameters<typeof admin>[1]): Promis
       await store.putClient(client);
       return { client: publicClient(client), ...(secret ? { clientSecret: secret } : {}) };
     }
+    case 'removeRedirectUris': {
+      // A customer that left (its realm deleted): its addresses leave the shared application too.
+      const current = await store.client(event.clientId);
+      if (!current) throw new AdminError('CLIENT_NOT_FOUND', 'client not found');
+      const drop = (a: string[], b?: string[]) => a.filter((u) => !(b ?? []).includes(u));
+      const redirectUris = drop(current.redirectUris, event.redirectUris);
+      await store.putClient({ ...current, redirectUris, postLogoutRedirectUris: drop(current.postLogoutRedirectUris, event.postLogoutRedirectUris), updatedAt: nowIso() });
+      return { redirectUris: redirectUris.length };
+    }
+    case 'deleteRealm': {
+      await realmOrFail(deps, event.realm);
+      const r = await store.deleteRealm(event.realm);
+      return { deleted: true, ...r };
+    }
+    case 'listRealms':
+      return { realms: await store.realmIds() };
     case 'addRedirectUris': {
       // Adds without a read-modify-write on the caller side (one realm at a time joins a shared application).
       const current = await store.client(event.clientId);
