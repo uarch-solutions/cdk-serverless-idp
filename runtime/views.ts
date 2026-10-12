@@ -70,9 +70,19 @@ export const esc = (s: unknown) =>
 const safeColor = (c?: string) => (c && /^#[0-9a-fA-F]{3,8}$/.test(c) ? c : '#2563eb');
 const safeUrl = (u?: string) => (u && /^https:\/\/[^\s"'<>]+$/.test(u) ? u : '');
 
-export interface PageOptions { realm: Pick<Realm, 'displayName' | 'branding'> | null; locale: Locale; title: string; body: string; status?: number }
+export interface PageOptions { realm: Pick<Realm, 'displayName' | 'branding' | 'theme'> | null; locale: Locale; title: string; body: string; status?: number }
 
-/** One accessible page: no scripts at all (strict CSP), realm color and logo. */
+const LIGHT = '--bg:#f5f6f8;--fg:#1f2933;--muted:#5f6b7a;--card:#fff;--line:#d9dee5;--err:#b42318';
+const DARK = '--bg:#111418;--fg:#e8ebef;--muted:#a3adb9;--card:#1a1f25;--line:#323a44;--err:#ff8a7a';
+
+/** Colors of the realm's theme: fixed light or dark, or light with the device's dark mode (`auto`). */
+function themeCss(theme: Realm['theme']) {
+  if (theme === 'light') return `:root{color-scheme:light;${LIGHT}}`;
+  if (theme === 'dark') return `:root{color-scheme:dark;${DARK}}`;
+  return `:root{color-scheme:light dark;${LIGHT}}\n@media (prefers-color-scheme:dark){:root{${DARK}}}`;
+}
+
+/** One accessible page: no scripts at all (strict CSP), realm color, logo and theme. */
 export function page({ realm, locale, title, body }: PageOptions) {
   const color = safeColor(realm?.branding.color);
   const logo = safeUrl(realm?.branding.logoUrl);
@@ -82,8 +92,8 @@ export function page({ realm, locale, title, body }: PageOptions) {
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">
 <title>${esc(title)}${realm ? ` · ${esc(realm.displayName)}` : ''}</title>
 <style>
-:root{--brand:${color};--bg:#f5f6f8;--fg:#1f2933;--muted:#5f6b7a;--card:#fff;--line:#d9dee5;--err:#b42318}
-@media (prefers-color-scheme:dark){:root{--bg:#111418;--fg:#e8ebef;--muted:#a3adb9;--card:#1a1f25;--line:#323a44;--err:#ff8a7a}}
+:root{--brand:${color}}
+${themeCss(realm?.theme)}
 *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:16px}
 main{width:100%;max-width:400px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:28px}
 header{text-align:center;margin-bottom:20px}header img{max-height:56px;max-width:200px}header p{margin:6px 0 0;color:var(--muted);font-weight:600}

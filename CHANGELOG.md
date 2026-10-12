@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.0
+
+- Theme per realm (`theme`: `light`, `dark` or `auto`) for the hosted pages. `auto`, the default, keeps following the
+  device as before; `light` or `dark` fixes it (e.g. a brand designed on light).
+
 ## 0.5.0
 
 - Admin: `deleteRealm` removes a realm with everything in it (people and their e-mail pointers, sessions and grants,

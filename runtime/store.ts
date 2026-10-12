@@ -24,9 +24,13 @@ import {
  * index would be eventually consistent, and a session is read right after it is written).
  */
 export type MfaPolicy = 'off' | 'optional' | 'required';
+/** Hosted pages: always light, always dark, or following the device (`auto`, the default). */
+export type Theme = 'light' | 'dark' | 'auto';
 export interface Realm {
   id: string; displayName: string; enabled: boolean; mfa: MfaPolicy; locale: 'pt-BR' | 'en';
   branding: { color?: string; logoUrl?: string };
+  /** @default 'auto' */
+  theme?: Theme;
   /** Upstream social login (client secret encrypted with the data key). */
   social: Partial<Record<'google' | 'facebook', { clientId: string; clientSecretEnc: string; enabled: boolean }>>;
   /** Link a social login to an existing account with the same verified e-mail. */

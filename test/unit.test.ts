@@ -84,6 +84,16 @@ describe('views', () => {
     expect(html).not.toContain('javascript:');
     expect(html).toContain('--brand:#2563eb'); // invalid color falls back
   });
+
+  it('theme per realm: fixed light or dark, or following the device (default)', () => {
+    const html = (theme?: 'light' | 'dark' | 'auto') => page({ realm: { displayName: 'X', branding: {}, theme }, locale: 'en', title: 't', body: '' });
+    expect(html('light')).toContain('color-scheme:light;--bg:#f5f6f8');
+    expect(html('light')).not.toContain('prefers-color-scheme');
+    expect(html('dark')).toContain('color-scheme:dark;--bg:#111418');
+    expect(html('dark')).not.toContain('prefers-color-scheme');
+    expect(html()).toContain('@media (prefers-color-scheme:dark)');
+    expect(html('auto')).toContain('color-scheme:light dark');
+  });
 });
 
 describe('signing keys', () => {

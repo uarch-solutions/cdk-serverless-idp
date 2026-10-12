@@ -122,6 +122,7 @@ async function run(event: AdminEvent, deps: Parameters<typeof admin>[1]): Promis
     case 'putRealm': {
       const input = event.realm;
       if (!REALM_ID.test(input.id)) throw new AdminError('INVALID_REALM', 'realm id: lowercase letters, digits and -');
+      if (input.theme && !['light', 'dark', 'auto'].includes(input.theme)) throw new AdminError('INVALID_REALM', 'theme: light, dark or auto');
       const current = await store.realm(input.id);
       const social: Realm['social'] = { ...(current?.social ?? {}) };
       for (const [p, s] of Object.entries(input.social ?? {})) {
@@ -132,6 +133,7 @@ async function run(event: AdminEvent, deps: Parameters<typeof admin>[1]): Promis
       }
       const realm: Realm = {
         id: input.id, displayName: input.displayName ?? current?.displayName ?? input.id, enabled: input.enabled ?? current?.enabled ?? true,
+        theme: input.theme ?? current?.theme ?? 'auto',
         mfa: input.mfa ?? current?.mfa ?? 'optional', locale: input.locale ?? current?.locale ?? 'pt-BR', branding: input.branding ?? current?.branding ?? {},
         social, socialAutoLink: input.socialAutoLink ?? current?.socialAutoLink ?? false, homeUrl: input.homeUrl ?? current?.homeUrl,
         createdAt: current?.createdAt ?? nowIso(), updatedAt: nowIso(),
